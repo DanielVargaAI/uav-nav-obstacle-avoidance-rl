@@ -216,6 +216,9 @@ class LidarObservationWrapper(gym.ObservationWrapper):
 
         lidar_data = self._cast_rays()
 
+        if self._base_env.render_mode == "human":
+            self.render_lidar_debug(duration=0.05)
+
         if self.add_to_obs  == "separate":
             return {**observation, "lidar": lidar_data}
         # TODO add the other options ?
