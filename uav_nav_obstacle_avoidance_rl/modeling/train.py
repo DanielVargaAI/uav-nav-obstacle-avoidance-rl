@@ -14,6 +14,7 @@ from uav_nav_obstacle_avoidance_rl.utils import env_factory
 from uav_nav_obstacle_avoidance_rl.utils.curriculum_callback import CurriculumCallback
 from uav_nav_obstacle_avoidance_rl.utils.eval_metrics_callback import CustomEvalCallback
 from uav_nav_obstacle_avoidance_rl.utils.train_metrics_callback import TrainMetricsCallback
+from uav_nav_obstacle_avoidance_rl.utils.cnn_extractor import Lidar2DCombinedExtractor
 
 app = typer.Typer()
 logger = config.logger
