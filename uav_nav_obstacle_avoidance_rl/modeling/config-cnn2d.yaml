@@ -1,0 +1,5 @@
+# @package _global_
+policy_kwargs:
+  features_extractor_class: uav_nav_obstacle_avoidance_rl.utils.cnn_extractor.Lidar2DCombinedExtractor
+  features_extractor_kwargs:
+    features_dim: 256    # size of the Feature-Vector

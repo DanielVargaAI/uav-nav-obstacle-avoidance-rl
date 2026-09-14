@@ -1,0 +1,6 @@
+mlp-baseline: 14.09.2026
+360° Horizontal, 36 Strahlen
+30° Vertikal, 3 Strahlen
+Normales NN
+2D-Action-Space (?)
+Aufruf: uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-name "mlp-baseline"   --wandb-tags exp-6   --timesteps 2000000   --eval-freq 200000   --n-envs 2   --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-mlp.yaml"

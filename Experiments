@@ -13,3 +13,14 @@
 -> CNN testen
 -> Action Space ankucken
 -> Genaue Daten des echten Lidars und Rundum testen
+
+14.09.2026:
+Gemacht:
++ CNN testweise eingebaut (Test aktuell ausstehend)
++ GPU benutzt, wirft Meldung -> CPU vermutlich besser (tatsächlich schneller)
+Erkenntnis:
+* CNN hat circular Einstellung, um hier die Enden der 2D-Tabelle zu verbinden
+TODOs:
+- Action Space anpassen
+- Mehrere Lidar Konfigurationen laufen lassen 30°, 360° und Sensor-Daten
+- Occupancy Grid implementieren

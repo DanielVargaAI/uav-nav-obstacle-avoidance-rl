@@ -4,6 +4,7 @@ from pathlib import Path
 import typer
 import wandb
 import yaml
+import importlib
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from wandb.integration.sb3 import WandbCallback
@@ -39,15 +40,45 @@ def _load_config(path: Path = config.EXP_CONFIG_PATH) -> dict:
         return yaml.safe_load(f)
 
 
+def _merge_configs(base: dict, custom_path: Path) -> dict:
+    """Merges custom config into base config."""
+    with open(custom_path) as f:
+        custom_cfg = yaml.safe_load(f) or {}
+
+    # Ergänze/Überstrich die policy_kwargs
+    if "policy_kwargs" in custom_cfg:
+        base["policy_kwargs"] = custom_cfg["policy_kwargs"]
+    return base
+
+
 def _train(
-    run: wandb.sdk.wandb_run.Run,
-    params: TrainParams,
-    exp_analysis: bool,
+        run: wandb.sdk.wandb_run.Run,
+        params: TrainParams,
+        exp_analysis: bool,
 ):
     """training logic used by both run_train and sweep agents"""
     env_config = dict(run.config["env"])
     ppo_config = dict(run.config["ppo"])
     curriculum_config = dict(run.config["curriculum"])
+
+    # 1. policy_kwargs aus der W&B run.config laden (falls vorhanden)
+    policy_kwargs = dict(run.config.get("policy_kwargs", {}))
+
+    # 2. Automatische Extraktion der LiDAR-Dimensionen für CNN
+    if "features_extractor_class" in policy_kwargs:
+        # Falls die Klasse als String übergeben wird (z.B. aus YAML), dynamisch importieren
+        if isinstance(policy_kwargs["features_extractor_class"], str):
+            module_name, class_name = policy_kwargs["features_extractor_class"].rsplit(".", 1)
+            module = importlib.import_module(module_name)
+            policy_kwargs["features_extractor_class"] = getattr(module, class_name)
+
+        # Injected automatisch num_rays_v und num_rays_h direkt aus der env-Config
+        extractor_kwargs = policy_kwargs.get("features_extractor_kwargs", {}).copy()
+        extractor_kwargs["num_rays_v"] = env_config["lidar"]["num_rays_vertical"]
+        extractor_kwargs["num_rays_h"] = env_config["lidar"]["num_rays_horizontal"]
+
+        policy_kwargs["features_extractor_kwargs"] = extractor_kwargs
+
     monitor_info = {"info_keywords": MONITOR_INFO_KEYWORDS}
 
     # ----- create environments --------
@@ -101,14 +132,16 @@ def _train(
         eval_callback.curriculum_callback = curriculum_callback
         callbacks.append(curriculum_callback)
 
+    # 3. Model Init mit übergabe der policy_kwargs
     model = PPO(
         "MlpPolicy",
         vec_env,
         **ppo_config,
+        policy_kwargs=policy_kwargs,  # <--- HIER ÜBERGEBEN
         verbose=params.verbose,
         tensorboard_log=f"{run.dir}/tensorboard",
         seed=params.seed,
-        device="cpu",
+        device="cpu",  # TODO: test "cuda" ("cpu" is old value)
     )
 
     model.learn(
@@ -118,12 +151,14 @@ def _train(
         log_interval=params.log_interval,
     )
 
+
 """
 uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train --exp-name "name" --wandb-tags exp- --timesteps 2_000_000 --eval-freq 200_000                      
 """
 @app.command()
 def run_train(
     exp_name: str = "exp",
+    config_file: str = "uav_nav_obstacle_avoidance_rl/modeling/config-mlp.yaml",  # Default MLP
     timesteps: int = TrainParams.timesteps,
     eval_freq: int = TrainParams.eval_freq,
     n_envs: int = TrainParams.n_envs,
@@ -139,6 +174,7 @@ def run_train(
     training script with W&B integration for experiment tracking
     """
     exp_config = _load_config()
+    exp_config = _merge_configs(exp_config, Path(config_file))  # merges cnn2d or mlp
     with wandb.init(
         project=wandb_project,
         name=exp_name,
