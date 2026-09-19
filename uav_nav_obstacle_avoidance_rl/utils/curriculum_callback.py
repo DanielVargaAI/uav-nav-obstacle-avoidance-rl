@@ -98,6 +98,10 @@ class CurriculumCallback(BaseCallback):
             return
         success_rate = np.mean(self.success_window)
 
+        if np.isnan(success_rate):
+            logger.warning("[Curriculum] Success Rate ist NaN! Transition übersprungen.")
+            return
+
         # log wandb
         self._log_metrics(success_rate)
 
@@ -128,6 +132,9 @@ class CurriculumCallback(BaseCallback):
     
     def _transition_stage(self, new_idx: int, old_idx: int=0, force_reset: bool=False):
         """ push new stage to all sub envs via VecEnv"""
+
+        prev_success_rate = np.mean(self.success_window) if len(self.success_window) > 0 else 0.0
+
         self._streak = 0  # prevent immediate retriggering of stage change
         self.success_window.clear()  # episodes from old difficulty are meaningless for evaluations in new stage
         
@@ -144,7 +151,7 @@ class CurriculumCallback(BaseCallback):
             # triggers reset on all sub envs, ensuring all new episodes start under new difficulty
             self.training_env.env_method('reset')
 
-        logger.info(f"[Curriculum] Stage Transition: {old_idx} → {new_idx}. Success Rate: {np.mean(self.success_window)}")
+        logger.info(f"[Curriculum] Stage Transition: {old_idx} → {new_idx}. Success Rate: {prev_success_rate:.2f}")
 
         # log wandb
         wandb.log({"curriculum/stage": new_idx}, step=self.num_timesteps)

@@ -322,7 +322,7 @@ class LidarFlattenWrapper(gym.ObservationWrapper):
         targets[:num_targets] = observation["target_deltas"][:num_targets]
 
         return np.concatenate([
-            observation["attitude"],
             observation["lidar"],
+            observation["attitude"],
             targets.flatten(),
         ]).astype(np.float32)

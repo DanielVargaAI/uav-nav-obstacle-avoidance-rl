@@ -2,5 +2,82 @@ mlp-baseline: 14.09.2026
 360° Horizontal, 36 Strahlen
 30° Vertikal, 3 Strahlen
 Normales NN
-2D-Action-Space (?)
-Aufruf: uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-name "mlp-baseline"   --wandb-tags exp-6   --timesteps 2000000   --eval-freq 200000   --n-envs 2   --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-mlp.yaml"
+-------------------------------------------
+cnn2d-experiment: 15.09.2026
+360° Horizontal, 36 Strahlen
+30° Vertikal, 3 Strahlen
+CNN:
+self.cnn = nn.Sequential(
+            nn.Conv2d(
+                1,
+                16,
+                kernel_size=(2, 3),
+                stride=1,
+                padding=(0, 1),
+                padding_mode="circular",
+            ),
+            nn.ReLU(),
+            nn.Conv2d(
+                16,
+                32,
+                kernel_size=(2, 3),
+                stride=1,
+                padding=(0, 1),
+                padding_mode="circular",
+            ),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+-------------------------------------------
+more_rays: 15.09.2026
+360° Horizontal, 72 Strahlen
+30° Vertikal, 6 Strahlen
+CNN:
+self.cnn = nn.Sequential(
+            nn.Conv2d(
+                1,
+                16,
+                kernel_size=(3, 3),
+                stride=1,
+                padding=(1, 1),
+                padding_mode="circular",
+            ),
+            nn.ReLU(),
+            nn.Conv2d(
+                16,
+                32,
+                kernel_size=(3, 3),
+                stride=1,
+                padding=(1, 1),
+                padding_mode="circular",
+            ),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+-------------------------------------------
+full_sphere: 17.09.2026
+360° * 72
+360° * 72
+CNN:
+self.cnn = nn.Sequential(
+            nn.Conv2d(
+                1,
+                16,
+                kernel_size=(3, 3),
+                stride=1,
+                padding=(2, 2),
+                padding_mode="circular",
+            ),
+            nn.ReLU(),
+            nn.Conv2d(
+                16,
+                32,
+                kernel_size=(3, 3),
+                stride=1,
+                padding=(2, 2),
+                padding_mode="circular",
+            ),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+-------------------------------------------

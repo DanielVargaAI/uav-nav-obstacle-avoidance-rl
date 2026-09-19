@@ -109,7 +109,8 @@ def _train(
     )
 
     adj_eval_freq = params.eval_freq // params.n_envs
-    adj_n_eval_episodes = params.n_eval_episodes // params.n_envs
+    # adj_n_eval_episodes = params.n_eval_episodes // params.n_envs  # Old
+    adj_n_eval_episodes = max(1, 32 // params.n_envs)
     eval_callback = CustomEvalCallback(
         vec_env_eval,
         best_model_save_path=f"{run.dir}/models",

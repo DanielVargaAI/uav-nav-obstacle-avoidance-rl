@@ -24,3 +24,13 @@ TODOs:
 - Action Space anpassen
 - Mehrere Lidar Konfigurationen laufen lassen 30°, 360° und Sensor-Daten
 - Occupancy Grid implementieren
+
+16.09.2026:
+Gemacht:
++ CNNs trainiert
++ Bugs mit success rate behoben
++ Anzahl Strahlen hochgestellt
++ Anzahl Cores hochgestellt
+Erkenntnis:
+* cnn_extractor war buggy
+* Brauche eine bessere Methode um die Werte des CNNs nicht immer per Hand umstellen zu müssen
