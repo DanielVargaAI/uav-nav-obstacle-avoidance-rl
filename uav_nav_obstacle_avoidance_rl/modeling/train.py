@@ -14,6 +14,7 @@ from uav_nav_obstacle_avoidance_rl.test import base_env_test
 from uav_nav_obstacle_avoidance_rl.utils import env_factory
 from uav_nav_obstacle_avoidance_rl.utils.curriculum_callback import CurriculumCallback
 from uav_nav_obstacle_avoidance_rl.utils.eval_metrics_callback import CustomEvalCallback
+from uav_nav_obstacle_avoidance_rl.utils.train_metadata_logger import save_model_metadata
 from uav_nav_obstacle_avoidance_rl.utils.train_metrics_callback import TrainMetricsCallback
 from uav_nav_obstacle_avoidance_rl.utils.cnn_extractor import Lidar2DCombinedExtractor
 
@@ -99,9 +100,18 @@ def _train(
         monitor_kwargs=monitor_info,
     )
 
+    model_save_dir = Path(f"{run.dir}/models")
+
+    # Metadaten automatisch mitspeichern
+    save_model_metadata(
+        save_dir=model_save_dir,
+        env_config=env_config,
+        policy_kwargs=policy_kwargs,
+    )
+
     # ----- callbacks --------
     callbacks = []
-    wandb_callback = WandbCallback(verbose=params.verbose)
+    wandb_callback = WandbCallback(verbose=params.verbose, model_save_path=None)
 
     train_callback = TrainMetricsCallback(
         run_path=run.dir,
@@ -113,7 +123,7 @@ def _train(
     adj_n_eval_episodes = max(1, 32 // params.n_envs)
     eval_callback = CustomEvalCallback(
         vec_env_eval,
-        best_model_save_path=f"{run.dir}/models",
+        best_model_save_path=model_save_dir.as_posix(),
         log_path=run.dir,
         eval_freq=adj_eval_freq,
         n_eval_episodes=adj_n_eval_episodes,
@@ -138,7 +148,7 @@ def _train(
         "MlpPolicy",
         vec_env,
         **ppo_config,
-        policy_kwargs=policy_kwargs,  # <--- HIER ÜBERGEBEN
+        policy_kwargs=policy_kwargs,
         verbose=params.verbose,
         tensorboard_log=f"{run.dir}/tensorboard",
         seed=params.seed,
@@ -160,6 +170,7 @@ uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train --exp-na
 def run_train(
     exp_name: str = "exp",
     config_file: str = "uav_nav_obstacle_avoidance_rl/modeling/config-mlp.yaml",  # Default MLP
+    use_wandb: bool = True,
     timesteps: int = TrainParams.timesteps,
     eval_freq: int = TrainParams.eval_freq,
     n_envs: int = TrainParams.n_envs,
@@ -176,14 +187,19 @@ def run_train(
     """
     exp_config = _load_config()
     exp_config = _merge_configs(exp_config, Path(config_file))  # merges cnn2d or mlp
+
+    # Mode festlegen: 'online' (hochladen) oder 'disabled' (stumm)
+    wandb_mode = "online" if use_wandb else "disabled"
+
     with wandb.init(
         project=wandb_project,
         name=exp_name,
         tags=wandb_tags,
         config=exp_config,
         dir=config.REPORTS_DIR.as_posix(),
-        monitor_gym=True,
-        save_code=True,
+        monitor_gym=False,
+        save_code=False,
+        mode=wandb_mode,
         settings=wandb.Settings(x_disable_stats=True),
     ) as run:
         _train(

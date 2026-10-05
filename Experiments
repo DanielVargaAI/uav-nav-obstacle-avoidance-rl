@@ -34,3 +34,13 @@ Gemacht:
 Erkenntnis:
 * cnn_extractor war buggy
 * Brauche eine bessere Methode um die Werte des CNNs nicht immer per Hand umstellen zu müssen
+* Reale Sensor-Daten: 360° Horizontal * 512/1024/2048 Strahlen; 45° Vertikal * 128 Strahlen
+* Steuerung der Drohne durch 4 Werte: X-Achse, Y-Achse, Z-Achse und Drehung um Y-Achse
+---
+Bis 05.10.2026:
+- Curriculum advance braucht noch weitere Tests
+- CNN Extraktor erstellt jetzt variabel 128 - 256 Werte aus verschiedenen Auflösungen
+- run_experiments.py kann mehrere Konfigurationen nacheinander laufen lassen ohne per Hand was einstellen zu müssen
+- WANDB Storage-Problem vermutlich gefixt
+- Metadata-Logger (Auflösung, Modell-Parameter) erstellt TODO: Ergebnis ansehen
+- Visualizer Entworfen TODO: Testen

@@ -2,8 +2,14 @@
 uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-name "mlp-baseline"   --wandb-tags exp-6   --timesteps 2000000   --eval-freq 200000   --n-envs 2   --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-mlp.yaml"
 
 --- CNN 2D Extractor ---
-uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-name "cnn2d-experiment"   --wandb-tags exp-6   --timesteps 2000000   --eval-freq 200000   --n-envs 2   --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml"
+uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-name "cnn2d-experiment-longer-window"   --wandb-tags exp-6   --timesteps 2000000   --eval-freq 200000   --n-envs 2   --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml"
 
 --- Mehr Strahlen 30/360 ---
 uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-name "more_rays"   --wandb-tags exp-6   --timesteps 2000000   --eval-freq 200000   --n-envs 16   --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml"
 
+
+--- Mehrere Experimente
+uv run python -m uav_nav_obstacle_avoidance_rl.modeling.run_experiments --use-wandb --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml" --timesteps 2000000   --eval-freq 200000 --n-envs 16
+
+--- Mehrere ohne WANDB
+uv run python -m uav_nav_obstacle_avoidance_rl.modeling.run_experiments  --no-use-wandb  --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml" --timesteps 2000000   --eval-freq 200000 --n-envs 16

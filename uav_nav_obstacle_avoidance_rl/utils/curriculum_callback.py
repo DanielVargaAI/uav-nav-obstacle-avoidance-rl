@@ -92,7 +92,7 @@ class CurriculumCallback(BaseCallback):
         logger.info(f"[Curriculum] Training starts at stage {self.stages[self.current_stage_idx]}")
 
     def _on_rollout_end(self):
-        """evaluate whether to advance or regress th curriculum stage. on rollout-end because the rollout buffer is complete"""
+        """evaluate whether to advance or regress the curriculum stage. on rollout-end because the rollout buffer is complete"""
         # collect enough episodes to make decisions
         if len(self.success_window) < self.window_size:
             return

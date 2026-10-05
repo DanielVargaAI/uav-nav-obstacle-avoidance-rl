@@ -1,0 +1,188 @@
+curriculum:
+  advance_patience: 5
+  advance_threshold: 0.8
+  enabled: true
+  regress_patience: 100
+  regress_threshold: 0.3
+  stages:
+  - desc: "Open space \u2014 learn flight and navigation"
+    num_obstacles_range: null
+    num_targets: 1
+    obstacle_distance_range: null
+    obstacle_placement: random
+    obstacle_shapes: null
+    obstacle_size_range: null
+    stage: 0
+    target_distance_range: null
+    walls_enabled: false
+  - desc: random field, semi-dense
+    num_obstacles_range:
+    - 50
+    - 80
+    num_targets: 1
+    obstacle_distance_range:
+    - 3.0
+    - 18.0
+    obstacle_placement: random
+    obstacle_shapes:
+    - cylinder
+    - box
+    - sphere
+    obstacle_size_range:
+    - 0.4
+    - 1.0
+    stage: 1
+    target_distance_range:
+    - 15.0
+    - 20.0
+    walls_enabled: true
+  - desc: ' along path field, semi-dense'
+    num_obstacles_range:
+    - 10
+    - 30
+    num_targets: 1
+    obstacle_distance_range:
+    - 3.0
+    - 18.0
+    obstacle_placement: along_path
+    obstacle_shapes:
+    - cylinder
+    - box
+    - sphere
+    obstacle_size_range:
+    - 0.2
+    - 1.0
+    stage: 2
+    target_distance_range:
+    - 18.0
+    - 24.0
+    walls_enabled: true
+  - desc: random field, dense, closer obstacles
+    num_obstacles_range:
+    - 80
+    - 120
+    num_targets: 1
+    obstacle_distance_range:
+    - 1.0
+    - 22.0
+    obstacle_placement: random
+    obstacle_shapes:
+    - cylinder
+    - box
+    - sphere
+    obstacle_size_range:
+    - 0.4
+    - 1.0
+    stage: 3
+    target_distance_range:
+    - 20.0
+    - 24.0
+    walls_enabled: true
+  - desc: around_target field, semi-dense
+    num_obstacles_range:
+    - 15
+    - 30
+    num_targets: 1
+    obstacle_distance_range:
+    - 6.0
+    - 12.0
+    obstacle_placement: around_target
+    obstacle_shapes:
+    - cylinder
+    - box
+    - sphere
+    obstacle_size_range:
+    - 0.2
+    - 1.0
+    stage: 4
+    target_distance_range:
+    - 15.0
+    - 20.0
+    walls_enabled: true
+  - desc: around_target field, small dense field, far
+    num_obstacles_range:
+    - 15
+    - 30
+    num_targets: 1
+    obstacle_distance_range:
+    - 1.0
+    - 8.0
+    obstacle_placement: around_target
+    obstacle_shapes:
+    - cylinder
+    - box
+    - sphere
+    obstacle_size_range:
+    - 0.2
+    - 1.0
+    stage: 5
+    target_distance_range:
+    - 20.0
+    - 24.0
+    walls_enabled: true
+  window_size: 20
+env:
+  agent_hz: 30
+  angle_representation: quaternion
+  cell_size: 1.0
+  flight_mode: 5
+  goal_reach_angle: 0.1
+  goal_reach_distance: 0.2
+  grid_sizes:
+  - 50.0
+  - 50.0
+  - 5.0
+  lidar:
+    add_to_obs: separate
+    fov_horizontal: 360.0
+    fov_vertical: 30.0
+    max_range: 10.0
+    min_range: 0.1
+    num_rays_horizontal: 128
+    num_rays_vertical: 32
+    ray_start_offset: 0.15
+  max_duration_seconds: 80.0
+  min_height: 0.01
+  num_obstacles_range: null
+  num_targets: 1
+  obstacle_shapes:
+  - cylinder
+  obstacle_size_range:
+  - 0.5
+  - 0.5
+  perception_mode: lidar
+  render_mode: null
+  render_resolution:
+  - 480
+  - 480
+  reward:
+    custom:
+      collision_penalty: 5.0
+      d_thresh: 3.0
+      k: 1.0
+      step_penalty: 0.01
+      target_reached_bonus: 10.0
+      w_obs: 1.0
+      w_prog: 1.0
+    pyflyt:
+      collision_penalty: 100.0
+      sparse_reward: false
+      step_penalty: 0.1
+      target_reached_bonus: 100.0
+    type: custom
+  start_pos:
+  - 0.0
+  - 0.0
+  - 1.0
+  target_distance_range: null
+  use_yaw_targets: false
+  visual_obstacles: false
+ppo:
+  batch_size: 64
+  clip_range: 0.2
+  ent_coef: 0.0
+  gae_lambda: 0.95
+  gamma: 0.99
+  learning_rate: 0.0003
+  n_steps: 2048
+  vf_coef: 0.5
