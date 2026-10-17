@@ -135,11 +135,11 @@ env:
   lidar:
     add_to_obs: separate
     fov_horizontal: 360.0
-    fov_vertical: 30.0
+    fov_vertical: 45.0
     max_range: 10.0
     min_range: 0.1
     num_rays_horizontal: 128
-    num_rays_vertical: 32
+    num_rays_vertical: 64
     ray_start_offset: 0.15
   max_duration_seconds: 80.0
   min_height: 0.01

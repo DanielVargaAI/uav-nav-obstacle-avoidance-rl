@@ -42,18 +42,18 @@ def main(
     """
     # --- TEST-MATRIX DEFINITION ---
     experiment_matrix = {
-        "30deg_vert": {
-            "fov_vertical": 30.0,
-            "fov_horizontal": 360.0,
-            "num_rays_horizontal": [36, 72, 128],
-            "num_rays_vertical": [3, 12, 32],
-        },
-        # "45deg_vert": {
-        #     "fov_vertical": 45.0,
+        # "30deg_vert": {
+        #     "fov_vertical": 30.0,
         #     "fov_horizontal": 360.0,
-        #     "num_rays_horizontal": [72, 128, 256],
-        #     "num_rays_vertical": [12, 32, 64],
+        #     "num_rays_horizontal": [36, 72, 128],
+        #     "num_rays_vertical": [3, 12, 32],
         # },
+        "45deg_vert": {
+            "fov_vertical": 45.0,
+            "fov_horizontal": 360.0,
+            "num_rays_horizontal": [72, 128],
+            "num_rays_vertical": [12, 32, 64],
+        },
     }
     # ------
 
