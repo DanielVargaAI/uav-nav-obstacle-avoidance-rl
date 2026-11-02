@@ -1,3 +1,6 @@
+import numpy as np
+import gymnasium as gym
+from gymnasium import spaces
 from gymnasium.wrappers import RescaleAction
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import VecVideoRecorder
@@ -20,67 +23,111 @@ from uav_nav_obstacle_avoidance_rl.environment.reward_wrapper import (
 from uav_nav_obstacle_avoidance_rl.environment.vector_voyager_env import (
     VectorVoyagerEnv,
 )
+from uav_nav_obstacle_avoidance_rl.utils.ego_grid_wrapper import EgoGridObservationWrapper
 
 
-# Env chain: Aviary (PyBullet) -> QuadXBaseEnv -> VectorVoyagerEnv -> LidarObservationWrapper -> CustomRewardWrapper -> RescaleAction -> NormalizeObservationWrapper -> LidarFlattenWrapper -> DummyVecEnv
+class DictEgoGridWrapper(gym.ObservationWrapper):
+    """
+    Formatiert Dict-Observations für Stable Baselines3 im Ego-Grid-Modus:
+    Wandelt 'target_deltas' von Sequence/Liste in eine feste Box um.
+    """
+
+    def __init__(self, env: gym.Env, context_length: int = 1):
+        super().__init__(env)
+        self.context_length = context_length if context_length is not None else 1
+
+        # Original Spaces kopieren
+        obs_spaces = dict(self.env.observation_space.spaces)
+
+        # target_deltas von Sequence zu fixer 1D Box konvertieren
+        self.target_len = self.context_length * 3
+        obs_spaces["target_deltas"] = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self.target_len,), dtype=np.float32
+        )
+
+        self.observation_space = spaces.Dict(obs_spaces)
+
+    def observation(self, obs: dict) -> dict:
+        new_obs = dict(obs)
+
+        # target_deltas flachklopfen und auf feste Länge bringen
+        deltas = np.array(obs["target_deltas"], dtype=np.float32).flatten()
+
+        if len(deltas) < self.target_len:
+            deltas = np.pad(deltas, (0, self.target_len - len(deltas)))
+        else:
+            deltas = deltas[: self.target_len]
+
+        new_obs["target_deltas"] = deltas
+        return new_obs
+
+
 def make_flat_voyager(**env_kwargs):
     """
     Create a flattened Vector Voyager environment
-
-    Args:
-        **env_kwargs: Additional arguments for the environment (including num_targets).
-            perception_mode: "lidar" or "none" (default "none")
-            lidar: dict of LidarObservationWrapper kwargs
-            reward: dict of reward wrapper kwargs
     """
-    # extract wrapper-specific parameters (not accepted by VectorVoyagerEnv)
-    perception_mode = env_kwargs.pop("perception_mode")
-    lidar_kwargs = env_kwargs.pop("lidar")
-    
-    reward_cfg = env_kwargs.pop("reward")
-    reward_type = reward_cfg["type"]
-    reward_kwargs = reward_cfg[reward_type]  # select the active sub-dict
+    # 1. Extract wrapper-specific parameters (not accepted directly by VectorVoyagerEnv)
+    perception_mode = env_kwargs.pop("perception_mode", "ego_grid")
+    lidar_kwargs = env_kwargs.pop("lidar", {})
+    ego_grid_kwargs = env_kwargs.pop("ego_grid", {})
 
-    # 1. base environment
+    reward_cfg = env_kwargs.pop("reward", {})
+    reward_type = reward_cfg.get("type", "custom")
+    reward_kwargs = reward_cfg.get(reward_type, {}).copy()
+
+    # w_smoothness aus reward_kwargs entfernen und für VectorVoyagerEnv freigeben
+    w_smoothness = reward_kwargs.pop("w_smoothness", 0.1)
+    if "w_smoothness" not in env_kwargs:
+        env_kwargs["w_smoothness"] = w_smoothness
+
+    # 2. Base environment
     env = VectorVoyagerEnv(**env_kwargs)
 
-    # 2. lidar wrapper 
+    # 3. Perception wrapper
     if perception_mode == "lidar":
         env = LidarObservationWrapper(env, **lidar_kwargs)
+    elif perception_mode == "ego_grid":
+        grid_size = ego_grid_kwargs.get("grid_size_meters", 10.0)
+        grid_height = ego_grid_kwargs.get("grid_height_meters", 4.0)
+        res = ego_grid_kwargs.get("resolution", 0.2)
+        env = EgoGridObservationWrapper(
+            env,
+            grid_size_meters=grid_size,
+            grid_height_meters=grid_height,
+            resolution=res,
+        )
 
-    # 3. reward wrappers
+    # 4. Reward wrappers
     if reward_type == "pyflyt":
         env = PyFlytRewardWrapper(env, **reward_kwargs)
     elif reward_type == "custom":
         env = CustomRewardWrapper(env, **reward_kwargs)
 
-    # 4. normalization wrappers - normalize actions and observations (works with and without lidar)
-    # env = RescaleAction(env, min_action=-1.0, max_action=1.0)
+    # 5. Normalization wrappers
     env = NormalizeObservationWrapper(env)
-    
-    # 5. flatten env
+
+    # 6. Flatten / Dict env
     if perception_mode == "lidar":
         env = LidarFlattenWrapper(env, context_length=env_kwargs.get("num_targets"))
+    elif perception_mode == "ego_grid":
+        # Nutzt den DictEgoGridWrapper anstelle des 1D-Flatten-Wrappers
+        env = DictEgoGridWrapper(env, context_length=env_kwargs.get("num_targets"))
     else:
         env = FlattenVectorVoyagerEnv(env, context_length=env_kwargs.get("num_targets"))
 
     return env
 
 
-# create vectorized environment for video recording
-def make_voyager_for_recording(video_folder, video_length, video_name, **env_kwargs,):
+def make_voyager_for_recording(video_folder, video_length, video_name, **env_kwargs):
     """
     Create environment for video recording with third-person camera and optional metrics.
     """
-    # create vectorized env and use render_mode="rgb_array" (env.rander() returns image array instead of poping up a window)
-    # add third person camera wrapper
     env = make_vec_env(
         env_id=lambda **env_kwargs: ThirdPersonCamWrapper(make_flat_voyager(**env_kwargs)),
         n_envs=1,
         env_kwargs=env_kwargs,
     )
 
-    # wrap with the VecVideoRecorder
     env = VecVideoRecorder(
         env,
         video_folder=video_folder,
@@ -90,6 +137,3 @@ def make_voyager_for_recording(video_folder, video_length, video_name, **env_kwa
     )
 
     return env
-
-
-

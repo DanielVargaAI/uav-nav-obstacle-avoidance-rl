@@ -51,8 +51,8 @@ def main(
         "45deg_vert": {
             "fov_vertical": 45.0,
             "fov_horizontal": 360.0,
-            "num_rays_horizontal": [72, 128],
-            "num_rays_vertical": [12, 32, 64],
+            "num_rays_horizontal": [72],
+            "num_rays_vertical": [12],
         },
     }
     # ------
@@ -93,15 +93,15 @@ def main(
 
             # 2. Temporäre Config erzeugen
             temp_cfg_path = _update_yaml_lidar_config(
-                Path("uav_nav_obstacle_avoidance_rl/modeling/config-defaults.yaml"),
+                Path(config_file),
                 lidar_override,
             )
 
             try:
-                # 3. Direkt deine bestehende run_train Funktion aufrufen
+                # 3. run_train mit der temporär erzeugten Config aufrufen
                 run_train(
                     exp_name=exp_name,
-                    config_file=config_file,
+                    config_file=str(temp_cfg_path),  # <- Hier temp_cfg_path nutzen
                     use_wandb=use_wandb,
                     timesteps=timesteps,
                     eval_freq=eval_freq,

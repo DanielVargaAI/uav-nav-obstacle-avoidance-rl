@@ -2,11 +2,13 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import wandb
+from pathlib import Path
 from plotly.subplots import make_subplots
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 
 from uav_nav_obstacle_avoidance_rl import config
+from uav_nav_obstacle_avoidance_rl.utils.env_factory import DictEgoGridWrapper
 
 logger = config.logger
 
@@ -160,101 +162,92 @@ class CustomEvalCallback(EvalCallback):
     #  Per-step callback (called by evaluate_policy on every step)
     # ──────────────────────────────────────────────────────────────
     def _log_eval_callback(self, locals_dict: dict, globals_dict: dict) -> None:
-            """
-            custom callback for evaluate_policy that collects detailed metrics.
-            this gets called after each step during evaluation.
+        try:
+            dones = locals_dict["dones"]
+            infos = locals_dict["infos"]
+            rewards = locals_dict["rewards"]
 
-            Available locals from evaluate_policy:
-                observations  — flattened obs fed to model.predict() (pre-step)
-                actions       — actions returned by model.predict()
-                new_observations — flattened obs after env.step()
-                rewards, dones, infos — step results
-                i             — current env index in the per-env loop
-            """
-            try:
-                dones = locals_dict["dones"]
-                infos = locals_dict["infos"]
-                rewards = locals_dict["rewards"]
+            policy_obs = locals_dict.get("observations")
+            actions = locals_dict.get("actions")
 
-                # observations/actions from evaluate_policy's locals
-                policy_obs = locals_dict.get("observations")   # (n_envs, obs_dim)
-                actions = locals_dict.get("actions")            # (n_envs, act_dim)
-
-                for env_idx in range(self.n_eval_envs):
+            for env_idx in range(self.n_eval_envs):
+                ep = self.current_episode_data[env_idx]
+                if not ep:
+                    self._reset_current_episode(env_idx)
                     ep = self.current_episode_data[env_idx]
-                    if not ep:
-                        self._reset_current_episode(env_idx)
-                        ep = self.current_episode_data[env_idx]
 
-                    underlying = self.underlying_envs[env_idx]
-                    state = underlying.env.state(0)
-                    lin_pos = state[3]
-                    lin_vel = state[2]
-
-                    ep["positions"].append(lin_pos.copy())
-                    ep["velocities"].append(lin_vel.copy())
-                    ep["step_rewards"].append(float(rewards[env_idx]))
-
-                    # capture policy observation and action vectors
-                    if policy_obs is not None:
+                # Sicheres Speichern von Observations (Dict oder Array)
+                if policy_obs is not None:
+                    if isinstance(policy_obs, dict):
+                        obs_slice = {k: v[env_idx].copy() for k, v in policy_obs.items()}
+                        ep["policy_obs"].append(obs_slice)
+                    else:
                         ep["policy_obs"].append(policy_obs[env_idx].copy())
-                    if actions is not None:
+
+                # Sicheres Speichern von Actions (Dict oder Array)
+                if actions is not None:
+                    if isinstance(actions, dict):
+                        act_slice = {k: v[env_idx].copy() for k, v in actions.items()}
+                        ep["actions"].append(act_slice)
+                    else:
                         ep["actions"].append(actions[env_idx].copy())
 
-                    # capture raw (pre-normalization, pre-flatten) dict observation
-                    raw_state = underlying.state  # dict: attitude, target_deltas, (lidar via wrapper)
-                    raw_entry = {
-                        "attitude": raw_state["attitude"].copy(),
-                        "target_deltas": raw_state["target_deltas"].copy(),
-                    }
-                    # lidar raw values: walk wrappers to find LidarObservationWrapper's last cast
-                    if self._obs_has_lidar:
-                        raw_entry["lidar"] = self._get_raw_lidar(env_idx)
-                    ep["raw_obs"].append(raw_entry)
+                underlying = self.underlying_envs[env_idx]
+                state = underlying.env.state(0)
+                lin_pos = state[3]
+                lin_vel = state[2]
 
-                    # accumulate per-step reward components from RewardWrapper
-                    step_info = infos[env_idx]
-                    for key in self.REWARD_COMPONENTS:
-                        if key in step_info:
-                            ep[key].append(float(step_info[key]))
+                ep["positions"].append(lin_pos.copy())
+                ep["velocities"].append(lin_vel.copy())
+                ep["step_rewards"].append(float(rewards[env_idx]))
 
-                    # capture one-time data at episode start
-                    if ep["start_position"] is None:
-                        ep["start_position"] = lin_pos.copy()
+                # raw obs
+                raw_state = underlying.state
+                raw_entry = {
+                    "attitude": raw_state["attitude"].copy(),
+                    "target_deltas": raw_state["target_deltas"].copy(),
+                }
+                if self._obs_has_lidar:
+                    raw_entry["lidar"] = self._get_raw_lidar(env_idx)
+                ep["raw_obs"].append(raw_entry)
 
-                        # capture obstacle AABBs (shape-agnostic)
-                        if hasattr(underlying, 'obstacles') and underlying.obstacles:
-                            obstacles_data = []
-                            for obs_id in underlying.obstacles:
-                                try:
-                                    aabb_min, aabb_max = underlying.env.getAABB(obs_id)
-                                    obstacles_data.append({
-                                        'aabb_min': np.array(aabb_min),
-                                        'aabb_max': np.array(aabb_max),
-                                    })
-                                except Exception as obs_error:
-                                    logger.debug(f"[EvalCallback] Could not capture obstacle {obs_id}: {obs_error}")
-                                    continue
-                            ep["obstacles"] = obstacles_data
-                        else:
-                            ep["obstacles"] = []
+                # step info / reward components
+                step_info = infos[env_idx]
+                for key in self.REWARD_COMPONENTS:
+                    if key in step_info:
+                        ep[key].append(float(step_info[key]))
 
-                    if ep["target_position"] is None:
-                        ep["target_position"] = underlying.waypoints.targets[0].copy()
+                if ep["start_position"] is None:
+                    ep["start_position"] = lin_pos.copy()
+                    if hasattr(underlying, 'obstacles') and underlying.obstacles:
+                        obstacles_data = []
+                        for obs_id in underlying.obstacles:
+                            try:
+                                aabb_min, aabb_max = underlying.env.getAABB(obs_id)
+                                obstacles_data.append({
+                                    'aabb_min': np.array(aabb_min),
+                                    'aabb_max': np.array(aabb_max),
+                                })
+                            except Exception as obs_error:
+                                logger.debug(f"[EvalCallback] Could not capture obstacle {obs_id}: {obs_error}")
+                                continue
+                        ep["obstacles"] = obstacles_data
+                    else:
+                        ep["obstacles"] = []
 
-                    if dones[env_idx]:
-                        self._process_completed_eval_episode(infos[env_idx], env_idx)
+                if ep["target_position"] is None:
+                    ep["target_position"] = underlying.waypoints.targets[0].copy()
 
-            except Exception as e:
-                logger.error(f"[EvalCallback] Error in _log_eval_callback: {e}", exc_info=True)
+                if dones[env_idx]:
+                    self._process_completed_eval_episode(infos[env_idx], env_idx)
+
+        except Exception as e:
+            logger.error(f"[EvalCallback] Error in _log_eval_callback: {e}", exc_info=True)
 
     # ──────────────────────────────────────────────────────────────
     #  Episode processing
     # ──────────────────────────────────────────────────────────────
     def _process_completed_eval_episode(self, info: dict, env_idx: int):
-        """
-        process a completed episode and log metrics to W&B
-        """
         try:
             ep = self.current_episode_data[env_idx]
 
@@ -317,14 +310,21 @@ class CustomEvalCallback(EvalCallback):
                     np.array(values).copy() if values else np.array([])
                 )
 
-            # store observation/action histories
-            self.current_eval_cycle_data["policy_obs_history"].append(
-                np.array(ep["policy_obs"]).copy() if ep["policy_obs"] else np.array([])
-            )
+            # --- EINMALIGES Speichern von policy_obs (mit Dict-Support) ---
+            if ep["policy_obs"]:
+                if isinstance(ep["policy_obs"][0], dict):
+                    flat_obs = [np.concatenate([np.atleast_1d(v) for v in step.values()]) for step in ep["policy_obs"]]
+                    self.current_eval_cycle_data["policy_obs_history"].append(np.array(flat_obs))
+                else:
+                    self.current_eval_cycle_data["policy_obs_history"].append(np.array(ep["policy_obs"]).copy())
+            else:
+                self.current_eval_cycle_data["policy_obs_history"].append(np.array([]))
+
             self.current_eval_cycle_data["actions_history"].append(
                 np.array(ep["actions"]).copy() if ep["actions"] else np.array([])
             )
-            # raw obs: stack each component separately
+
+            # raw obs
             if ep["raw_obs"]:
                 self.current_eval_cycle_data["raw_attitude_history"].append(
                     np.array([r["attitude"] for r in ep["raw_obs"]])
@@ -353,50 +353,37 @@ class CustomEvalCallback(EvalCallback):
     # ──────────────────────────────────────────────────────────────
 
     def _log_after_evaluation(self):
-        """log detailed metrics of a completed evaluation-round to W&B"""
+        """log detailed metrics of a completed evaluation-round"""
         n_episodes = len(self.current_eval_cycle_data["success"])
         if n_episodes == 0:
             logger.warning("[EvalCallback] No episodes were recorded during evaluation — skipping metrics logging.")
             return
 
-        # reward component means across eval episodes
-        reward_component_metrics = {}
-        for key in self.REWARD_COMPONENTS:
-            component_name = key.replace("reward_", "")
-            sums = self.current_eval_cycle_data[f"{key}_sum"]
-            if sums:
-                # ep_sum_eval = per-episode reward sum, averaged over the eval cycle
-                reward_component_metrics[f"eval_cycle_cum_reward/{component_name}"] = float(np.mean(sums))
-
-        success_rate = np.mean(self.current_eval_cycle_data["success"])
-
+        # 1. Metriken berechnen
+        success_rate = float(np.mean(self.current_eval_cycle_data["success"]))
         eval_metrics = {
-            # success = all targets reached AND no collision
-            # _cycle suffix = averaged over all episodes in this eval cycle
             "eval_cycle/success_rate": success_rate,
-            "eval_cycle/collision_rate": np.mean(self.current_eval_cycle_data["collision"]),
-            "eval_cycle/targets_reached": np.mean(self.current_eval_cycle_data["targets_reached"]),
-            "eval_cycle/num_targets": np.mean(self.current_eval_cycle_data["num_targets"]),
-            "eval_cycle/num_obstacles": np.mean(self.current_eval_cycle_data["num_obstacles"]),
-            "eval_cycle/mean_velocity": np.mean(self.current_eval_cycle_data["mean_velocities"]),
-            "eval_cycle/path_length": np.mean(self.current_eval_cycle_data["path_lengths"]),
-            "eval_cycle/path_efficiency": np.mean(self.current_eval_cycle_data["path_efficiencies"]),
-            "eval_cycle/ep_length": np.mean(self.current_eval_cycle_data["episode_lengths"]),
-            # reward decomposition
-            **reward_component_metrics,
+            "eval_cycle/collision_rate": float(np.mean(self.current_eval_cycle_data["collision"])),
+            "eval_cycle/targets_reached": float(np.mean(self.current_eval_cycle_data["targets_reached"])),
+            "eval_cycle/mean_velocity": float(np.mean(self.current_eval_cycle_data["mean_velocities"])),
+            "eval_cycle/path_length": float(np.mean(self.current_eval_cycle_data["path_lengths"])),
+            "eval_cycle/path_efficiency": float(np.mean(self.current_eval_cycle_data["path_efficiencies"])),
+            "eval_cycle/ep_length": float(np.mean(self.current_eval_cycle_data["episode_lengths"])),
         }
 
-        if self.curriculum_callback is not None:
-            cc = self.curriculum_callback
-            composite = float(success_rate) * ((cc.current_stage_idx + 1) / cc.num_stages)
-            eval_metrics["eval_cycle/composite_success_rate"] = composite
+        # 2. In den SB3-Logger schreiben (Schreibt automatisch in Tensorboard)
+        for key, value in eval_metrics.items():
+            self.logger.record(key, value)
 
-        wandb.log(eval_metrics, step=self.num_timesteps)
-        logger.info(f"[EvalCallback] Eval cycle logged: {n_episodes} episodes, "
-                     f"success_rate={eval_metrics['eval_cycle/success_rate']:.2f}, "
-                    #  f"all_targets_reached_rate={eval_metrics['eval_cycle/all_targets_reached_rate']:.2f}"
-        )
+        # logger.info(f"[LocalLog] Evaluierungs-Metriken in SB3-Logger geschrieben (Step {self.num_timesteps}).")
 
+        # HINWEIS: KEIN self.logger.dump() aufrufen, das übernimmt SB3 im Trainingsloop!
+
+        # 3. Falls W&B im Online-Modus aktiv ist:
+        if wandb.run is not None and getattr(wandb.run, "mode", None) != "disabled":
+            wandb.log(eval_metrics, step=self.num_timesteps)
+
+        logger.info(f"[EvalCallback] Eval cycle logged: {n_episodes} episodes, success_rate={success_rate:.2f}")
 
     # ──────────────────────────────────────────────────────────────
     #  Analysis plots
@@ -405,14 +392,21 @@ class CustomEvalCallback(EvalCallback):
     def _log_success_analysis(self):
         """Create and log success analysis plots to W&B using Plotly"""
         try:
-            df = pd.DataFrame(self.current_eval_cycle_data)
+            target_len = len(self.current_eval_cycle_data.get("success", []))
+
+            # Filtere nur Schlüssel mit der korrekten Länge heraus
+            valid_data = {
+                k: v for k, v in self.current_eval_cycle_data.items()
+                if isinstance(v, list) and len(v) == target_len
+            }
+
+            df = pd.DataFrame(valid_data)
+            if df.empty:
+                logger.warning("[EvalCallback] No data in DataFrame for success analysis.")
+                return
 
             success_df = df[df["success"] == 1]
             failure_df = df[df["success"] == 0]
-
-            if success_df.empty or failure_df.empty:
-                logger.debug("[EvalCallback] Insufficient data for success analysis (need both success and failure episodes)")
-                return
 
             fig = make_subplots(
                 rows=3,
@@ -435,54 +429,73 @@ class CustomEvalCallback(EvalCallback):
                 ],
             )
 
-            # --- histograms with mean lines ---
+            # --- Histogramme zeichnen (sofern Daten vorhanden) ---
             hist_configs = [
-                ("path_lengths",     "Path Length (m)",   1, 1, "x",  "y domain"),
-                ("mean_velocities",  "Velocity (m/s)",    1, 2, "x2", "y2 domain"),
-                ("episode_rewards",  "Episode Reward",    1, 3, "x3", "y3 domain"),
-                ("episode_lengths",  "Steps per Episode", 2, 1, "x4", "y4 domain"),
-                ("num_obstacles",    "Num Obstacles",     3, 1, "x7", "y7 domain"),
-                ("num_targets",      "Num Targets",       3, 2, "x8", "y8 domain"),
+                ("path_lengths", "Path Length (m)", 1, 1, "x", "y domain"),
+                ("mean_velocities", "Velocity (m/s)", 1, 2, "x2", "y2 domain"),
+                ("episode_rewards", "Episode Reward", 1, 3, "x3", "y3 domain"),
+                ("episode_lengths", "Steps per Episode", 2, 1, "x4", "y4 domain"),
+                ("num_obstacles", "Num Obstacles", 3, 1, "x7", "y7 domain"),
+                ("num_targets", "Num Targets", 3, 2, "x8", "y8 domain"),
             ]
 
             for i, (col, xlabel, row, c, xref, yref) in enumerate(hist_configs):
                 show_legend = (i == 0)
-                fig.add_trace(go.Histogram(x=success_df[col], name="Success", marker_color="green", opacity=0.7, nbinsx=20, showlegend=show_legend), row=row, col=c)
-                fig.add_trace(go.Histogram(x=failure_df[col], name="Failure", marker_color="red", opacity=0.7, nbinsx=20, showlegend=show_legend), row=row, col=c)
+                if not success_df.empty:
+                    fig.add_trace(
+                        go.Histogram(x=success_df[col], name="Success", marker_color="green", opacity=0.7, nbinsx=20, showlegend=show_legend),
+                        row=row, col=c)
+                    val = success_df[col].mean()
+                    fig.add_shape(type="line", x0=val, y0=0, x1=val, y1=1, line=dict(color="darkgreen", width=2, dash="dash"), xref=xref, yref=yref,
+                                  row=row, col=c)
 
-                for val, color in [(success_df[col].mean(), "darkgreen"), (failure_df[col].mean(), "darkred")]:
-                    fig.add_shape(type="line", x0=val, y0=0, x1=val, y1=1,
-                                  line=dict(color=color, width=2, dash="dash"),
-                                  xref=xref, yref=yref, row=row, col=c)
+                if not failure_df.empty:
+                    fig.add_trace(go.Histogram(x=failure_df[col], name="Failure", marker_color="red", opacity=0.7, nbinsx=20, showlegend=show_legend),
+                                  row=row, col=c)
+                    val = failure_df[col].mean()
+                    fig.add_shape(type="line", x0=val, y0=0, x1=val, y1=1, line=dict(color="darkred", width=2, dash="dash"), xref=xref, yref=yref,
+                                  row=row, col=c)
 
                 fig.update_xaxes(title_text=xlabel, row=row, col=c)
                 fig.update_yaxes(title_text="Frequency", row=row, col=c)
 
-            # --- box plot comparison ---
+            # --- Boxplot Vergleich ---
             for metric in ["path_lengths", "mean_velocities", "episode_rewards", "episode_lengths", "num_obstacles", "num_targets"]:
-                fig.add_trace(go.Box(y=success_df[metric], name=f"{metric} (S)", marker_color="lightgreen", showlegend=False), row=2, col=2)
-                fig.add_trace(go.Box(y=failure_df[metric], name=f"{metric} (F)", marker_color="lightcoral", showlegend=False), row=2, col=2)
+                if not success_df.empty:
+                    fig.add_trace(go.Box(y=success_df[metric], name=f"{metric} (S)", marker_color="lightgreen", showlegend=False), row=2, col=2)
+                if not failure_df.empty:
+                    fig.add_trace(go.Box(y=failure_df[metric], name=f"{metric} (F)", marker_color="lightcoral", showlegend=False), row=2, col=2)
 
-            # --- pie: success vs failure ---
+            # --- Pie: Success vs Failure ---
             counts = df["success"].value_counts().sort_index()
-            labels = ["Failure" if i == 0 else "Success" for i in counts.index]
-            colors = ["lightcoral" if i == 0 else "lightgreen" for i in counts.index]
+            labels = ["Failure" if idx == 0 else "Success" for idx in counts.index]
+            colors = ["lightcoral" if idx == 0 else "lightgreen" for idx in counts.index]
             if len(counts) > 0:
                 fig.add_trace(go.Pie(labels=labels, values=counts.values, marker_colors=colors, showlegend=False), row=2, col=3)
 
-            # --- pie: failure reasons ---
-            n_collision = failure_df["collision"].sum()
-            reasons = {"Collision": n_collision, "Timeout/Other": len(failure_df) - n_collision}
-            reasons = {k: v for k, v in reasons.items() if v > 0}
-            if reasons:
-                fig.add_trace(go.Pie(labels=list(reasons.keys()), values=list(reasons.values()), showlegend=False), row=3, col=3)
+            # --- Pie: Failure Reasons ---
+            if not failure_df.empty:
+                n_collision = failure_df["collision"].sum()
+                reasons = {"Collision": n_collision, "Timeout/Other": len(failure_df) - n_collision}
+                reasons = {k: v for k, v in reasons.items() if v > 0}
+                if reasons:
+                    fig.add_trace(go.Pie(labels=list(reasons.keys()), values=list(reasons.values()), showlegend=False), row=3, col=3)
 
+            # --- Speichern & Loggen ---
             fig.update_layout(height=1200, title_text="Success Analysis Dashboard", showlegend=True)
 
-            wandb.log(
-                {"eval_analysis/success_analysis_dashboard": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
-                step=self.num_timesteps,
-            )
+            if self.log_path:
+                html_dir = Path(self.log_path) / "eval_plots"
+                html_dir.mkdir(parents=True, exist_ok=True)
+                out_file = html_dir / f"success_analysis_step_{self.num_timesteps}.html"
+                fig.write_html(str(out_file))
+                # logger.info(f"[LocalLog] Plot gespeichert unter: {out_file.resolve()}")
+
+            if wandb.run is not None and getattr(wandb.run, "mode", None) != "disabled":
+                wandb.log(
+                    {"eval_analysis/success_analysis_dashboard": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
+                    step=self.num_timesteps,
+                )
 
         except Exception as e:
             logger.exception(f"[EvalCallback] Error creating success analysis plots: {e}")
@@ -817,6 +830,19 @@ class CustomEvalCallback(EvalCallback):
                     step=self.num_timesteps,
                 )
 
+                # Interaktiven HTML-Plot lokal auf der Festplatte speichern
+                if self.log_path:
+                    html_dir = Path(self.log_path) / "eval_plots"
+                    html_dir.mkdir(parents=True, exist_ok=True)
+                    fig.write_html(str(html_dir / f"trajectory_step_{self.num_timesteps}.html"))
+
+                # Nur an W&B senden, wenn online
+                if wandb.run is not None and getattr(wandb.run, "mode", None) != "disabled":
+                    wandb.log(
+                        {f"eval_episode/{group_key}/eval_trajectory": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
+                        step=self.num_timesteps,
+                    )
+
         except Exception as e:
             logger.exception(f"[EvalCallback] Error creating trajectory plot: {e}")
 
@@ -928,6 +954,19 @@ class CustomEvalCallback(EvalCallback):
                     {f"eval_episode/{group_key}/reward_decomposition": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
                     step=self.num_timesteps,
                 )
+
+                # Interaktiven HTML-Plot lokal auf der Festplatte speichern
+                if self.log_path:
+                    html_dir = Path(self.log_path) / "eval_plots"
+                    html_dir.mkdir(parents=True, exist_ok=True)
+                    fig.write_html(str(html_dir / f"trajectory_step_{self.num_timesteps}.html"))
+
+                # Nur an W&B senden, wenn online
+                if wandb.run is not None and getattr(wandb.run, "mode", None) != "disabled":
+                    wandb.log(
+                        {f"eval_episode/{group_key}/eval_trajectory": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
+                        step=self.num_timesteps,
+                    )
 
         except Exception as e:
             logger.exception(f"[EvalCallback] Error creating reward decomposition plot: {e}")
@@ -1163,7 +1202,9 @@ class CustomEvalCallback(EvalCallback):
 
                     # lidar summary lines (min, mean, max over rays per step)
                     lidar_for_summary = raw_lidar[:n_steps] if raw_lidar is not None and len(raw_lidar) > 0 else policy_lidar
-                    if lidar_for_summary is not None:
+
+                    # PRÜFUNG ERGÄNZEN: Nicht nur 'is not None', sondern auch 'size > 0' und 'shape[1] > 0'
+                    if lidar_for_summary is not None and lidar_for_summary.size > 0 and lidar_for_summary.shape[1] > 0:
                         lidar_min = lidar_for_summary.min(axis=1)
                         lidar_mean = lidar_for_summary.mean(axis=1)
                         lidar_max = lidar_for_summary.max(axis=1)
@@ -1189,11 +1230,17 @@ class CustomEvalCallback(EvalCallback):
 
                 # ── ACTIONS ──
                 ACTION_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
+                self.ACTION_LABELS = ["act_u", "act_v", "act_vr"]
                 for i, lbl in enumerate(self.ACTION_LABELS):
+                    if i >= actions.shape[1]:
+                        break
                     fig.add_trace(go.Scatter(
-                        x=steps, y=actions[:n_steps, i],
-                        mode="lines", name=lbl,
-                        legendgroup="actions", legendgrouptitle_text="Actions",
+                        x=steps,
+                        y=actions[:n_steps, i],
+                        mode="lines",
+                        name=lbl,
+                        legendgroup="actions",
+                        legendgrouptitle_text="Actions",
                         line=dict(color=ACTION_COLORS[i], width=1.5),
                     ), row=row_idx, col=1)
                 fig.update_yaxes(title_text="Action Value", row=row_idx, col=1)
@@ -1222,6 +1269,19 @@ class CustomEvalCallback(EvalCallback):
                     {f"eval_episode/{group_key}/obs_action_decomposition": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
                     step=self.num_timesteps,
                 )
+
+                # Interaktiven HTML-Plot lokal auf der Festplatte speichern
+                if self.log_path:
+                    html_dir = Path(self.log_path) / "eval_plots"
+                    html_dir.mkdir(parents=True, exist_ok=True)
+                    fig.write_html(str(html_dir / f"trajectory_step_{self.num_timesteps}.html"))
+
+                # Nur an W&B senden, wenn online
+                if wandb.run is not None and getattr(wandb.run, "mode", None) != "disabled":
+                    wandb.log(
+                        {f"eval_episode/{group_key}/eval_trajectory": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
+                        step=self.num_timesteps,
+                    )
 
         except Exception as e:
             logger.exception(f"[EvalCallback] Error creating obs/action decomposition plot: {e}")
@@ -1262,6 +1322,18 @@ class CustomEvalCallback(EvalCallback):
                 step=self.num_timesteps,
             )
 
+            if self.log_path:
+                html_dir = Path(self.log_path) / "eval_plots"
+                html_dir.mkdir(parents=True, exist_ok=True)
+                fig.write_html(str(html_dir / f"success_analysis_step_{self.num_timesteps}.html"))
+
+            # Falls W&B aktiv ist:
+            if wandb.run is not None:
+                wandb.log(
+                    {"eval_analysis/success_analysis_dashboard": wandb.Html(fig.to_html(include_plotlyjs="cdn"))},
+                    step=self.num_timesteps,
+                )
+
         except Exception as e:
             logger.exception(f"[EvalCallback] Error creating correlation matrix plot: {e}")
 
@@ -1285,11 +1357,12 @@ class CustomEvalCallback(EvalCallback):
         # walk wrapper chain
         walker = env
         while walker is not None:
-            if isinstance(walker, LidarFlattenWrapper):
+            # Prüfe auf LidarFlattenWrapper ODER DictEgoGridWrapper
+            if isinstance(walker, (LidarFlattenWrapper, DictEgoGridWrapper)):
                 self._obs_has_lidar = True
-                self._obs_lidar_size = walker._lidar_size
-                self._obs_target_size = walker._target_size
-                self._obs_attitude_size = walker._attitude_size
+                self._obs_lidar_size = getattr(walker, "_lidar_size", getattr(walker, "lidar_size", 0))
+                self._obs_target_size = getattr(walker, "_target_size", getattr(walker, "target_size", 3))
+                self._obs_attitude_size = getattr(walker, "_attitude_size", getattr(walker, "attitude_size", 11))
             if isinstance(walker, NormalizeObservationWrapper):
                 self._obs_has_normalization = True
             walker = getattr(walker, "env", None)

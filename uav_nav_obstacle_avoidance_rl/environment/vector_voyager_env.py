@@ -16,43 +16,55 @@ logger = config.logger
 # my waypoint environment based on PyFlyt/QuadX-Waypoints-v3
 class VectorVoyagerEnv(QuadXBaseEnv):
     def __init__(
-        self,
-        start_pos: list,
-        # boundary parameters
-        grid_sizes: Sequence[float],
-        cell_size: float,
-        min_height: float,
-        # waypoint parameters
-        num_targets: int,
-        target_distance_range: List[float] | None,
-        use_yaw_targets: bool,
-        goal_reach_distance: float,
-        goal_reach_angle: float,
-        # obstacle parameters
-        num_obstacles_range: List[int] | None,
-        obstacle_shapes: List[str] | None,
-        obstacle_size_range: List[float] | None,
-        visual_obstacles: bool | None,
-        # simulation parameters
-        max_duration_seconds: float, 
-        flight_mode: int,
-        angle_representation: Literal["euler", "quaternion"],
-        agent_hz: int,
-        render_mode: Literal["human", "rgb_array"] | None,
-        render_resolution: Sequence[int],
+            self,
+            start_pos: list,
+            # boundary parameters
+            grid_sizes: Sequence[float],
+            cell_size: float,
+            min_height: float,
+            # waypoint parameters
+            num_targets: int,
+            target_distance_range: List[float] | None,
+            use_yaw_targets: bool,
+            goal_reach_distance: float,
+            goal_reach_angle: float,
+            # obstacle parameters
+            num_obstacles_range: List[int] | None,
+            obstacle_shapes: List[str] | None,
+            obstacle_size_range: List[float] | None,
+            visual_obstacles: bool | None,
+            # simulation parameters
+            max_duration_seconds: float,
+            flight_mode: int,
+            angle_representation: Literal["euler", "quaternion"],
+            agent_hz: int,
+            render_mode: Literal["human", "rgb_array"] | None,
+            render_resolution: Sequence[int],
+            # NEW: Flight control mode & smoothness reward parameters
+            control_mode: Literal["velocity", "waypoint"] = "waypoint",
+            max_waypoint_distance: float = 1.5,
+            w_smoothness: float = 0.1,
     ):
+        # Bei control_mode == "waypoint" erzwingen wir flight_mode = 7 (Position control x, y, z, yaw in PyFlyt)
+        self.control_mode = control_mode
+        self.max_waypoint_distance = max_waypoint_distance
+        self.w_smoothness = w_smoothness
+        self.prev_action: Optional[np.ndarray] = None
+
+        effective_flight_mode = 7 if control_mode == "waypoint" else flight_mode
+
         super().__init__(
-            start_pos=np.array([start_pos]),            # uav starting at pos [0, 0, 1]. Is randomized and overwritten in reset()
-            flight_mode=flight_mode,
+            start_pos=np.array([start_pos]),  # uav starting at pos [0, 0, 1]. Is randomized and overwritten in reset()
+            flight_mode=effective_flight_mode,
             max_duration_seconds=max_duration_seconds,
-            angle_representation=angle_representation,  # its required in the base class but its not used in this env
+            angle_representation=angle_representation,  # required in base class
             agent_hz=agent_hz,
             render_mode=render_mode,
             render_resolution=(render_resolution[0], render_resolution[1]),
         )
         # boundary parameters
         self.grid_sizes = grid_sizes
-        self.z_size = grid_sizes[2]                     # z dimension stored separately (not in occupancy grid)
+        self.z_size = grid_sizes[2]  # z dimension stored separately
         self.cell_size = cell_size
         self.min_height = min_height
         # waypoint parameters
@@ -64,16 +76,14 @@ class VectorVoyagerEnv(QuadXBaseEnv):
         self.obstacle_size_range = obstacle_size_range
         self.visual_obstacles = visual_obstacles
         self.obstacle_placement: Literal["random", "around_target", "along_path"] = "random"
-        self.obstacle_distance_range: List[float] | None = None  # used with "around_target" placement
-        self.num_obs = 0                                # for the case num_obstacles_range = [0,0]
-        self.obstacles = []                             # store PyBullet body IDs
-        self.boundary_wall_ids = []                     # store PyBullet body IDs for walls
-        self.walls_enabled = False                       # toggled by curriculum set_stage()
+        self.obstacle_distance_range: List[float] | None = None
+        self.num_obs = 0
+        self.obstacles = []  # store PyBullet body IDs
+        self.boundary_wall_ids = []  # store PyBullet body IDs for walls
+        self.walls_enabled = False  # toggled by curriculum set_stage()
 
-        # Note: obstacles are created in the first reset() call when self.env (Aviary/Pybullet client) is available. Pybullet connections from gym are created after env reset()
-
-        # init 2D occupancy grid (only XY plane)
-        self.occupancy_grid = OccupancyGrid(grid_sizes[:2], cell_size, rng=self.np_random)
+        # init 3D occupancy grid (alle 3 Dimensionen uebergeben)
+        self.occupancy_grid = OccupancyGrid(grid_sizes, cell_size, rng=self.np_random)
 
         # init waypoint handler
         self.waypoints = WaypointHandler(
@@ -82,21 +92,24 @@ class VectorVoyagerEnv(QuadXBaseEnv):
             use_yaw_targets=use_yaw_targets,
             goal_reach_distance=goal_reach_distance,
             goal_reach_angle=goal_reach_angle,
-            flight_dome_size=5,  # dummy value; targets are overwritten by _create_targets() after reset()
+            flight_dome_size=5,  # dummy value
             min_height=min_height,
             np_random=self.np_random,
         )
 
-        # define action space
-        # according to the DJI Inspire 3 specifications:
-        #   u, v (horizontal velocities): ±26 m/s,
-        #   vr (yaw rate): ±150°/s, which is ±2.62 rad/s,
-        #   vz (vertical velocity, falling speed): ±8 m/s.
-        self.action_space = gym.spaces.Box(  # u, v, vr, vz
-            low=np.array([-26.0, -26.0, -2.62, -8.0], np.float32),
-            high=np.array([26.0, 26.0, 2.62, 8.0], np.float32),
-            dtype=np.float32,
-        )
+        # define action space according to control mode
+        if self.control_mode == "waypoint":
+            # Relative offset (dx, dy, dz) normalized in [-1, 1]
+            self.action_space = gym.spaces.Box(
+                low=-1.0, high=1.0, shape=(3,), dtype=np.float32
+            )
+        else:
+            # Velocity control (u, v, vr, vz)
+            self.action_space = gym.spaces.Box(
+                low=np.array([-26.0, -26.0, -2.62, -8.0], np.float32),
+                high=np.array([26.0, 26.0, 2.62, 8.0], np.float32),
+                dtype=np.float32,
+            )
 
         # define observation space
         self.observation_space = gym.spaces.Dict(
@@ -104,7 +117,7 @@ class VectorVoyagerEnv(QuadXBaseEnv):
                 "attitude": gym.spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(11,),  # 11 = 2 (yaw position) + 1 (yaw vel) + 3 (lin_vel) + 1 (height) + 4 (1 previous action)
+                    shape=(11,),
                     dtype=np.float32,
                 ),
                 "target_deltas": gym.spaces.Sequence(
@@ -114,24 +127,20 @@ class VectorVoyagerEnv(QuadXBaseEnv):
                         shape=(4,) if use_yaw_targets else (3,),
                         dtype=np.float32,
                     ),
-                    stack=True,  # True = convert the list of Box samples into one stacked NumPy array of shape (num_targets, 3), used with LSTM
+                    stack=True,
                 ),
             }
         )
 
     def reset(
-        self,
-        *,
-        seed: None | int = None,
-        options: None | dict[str, Any] = None,
-        drone_options: None | dict[str, Any] = None,
+            self,
+            *,
+            seed: None | int = None,
+            options: None | dict[str, Any] = None,
+            drone_options: None | dict[str, Any] = None,
     ) -> tuple[dict[Literal["attitude", "target_deltas"], np.ndarray], dict]:
         """
-        rest the env: resets simulation state (obstacles, uav), the waypoint hnadler, and any other counters
-
-        NOTE: begin_reset() creates a NEW Aviary each time, disconnecting the old one.
-        This means all PyBullet bodies (including obstacles) are destroyed.
-        Obstacles must be recreated after each begin_reset().
+        reset the env: resets simulation state, waypoint handler, and counters
         """
         if options is None:
             options = {}
@@ -139,34 +148,36 @@ class VectorVoyagerEnv(QuadXBaseEnv):
         # reset occupancy grid
         self.occupancy_grid.reset_occupancy()
 
+        # reset action smoothness memory
+        self.prev_action = np.zeros(self.action_space.shape, dtype=np.float32)
+
         # --- set random UAV start position
         free_cell = self.occupancy_grid.get_random_free_cell()
-        x, y = self.occupancy_grid.cell_to_world(free_cell)
+        x, y = self.occupancy_grid.cell_to_world(free_cell[:2])
         z = self.np_random.uniform(self.min_height + 0.5, self.z_size)
-        self.start_pos = np.array([[x, y, z]])  # this overwrites the base env start_pos attribute
-        self.occupancy_grid.mark_cells([free_cell], occupied=True)  # mark uav start cell as occupied
+        self.start_pos = np.array([[x, y, z]])
+        self.occupancy_grid.mark_cells([free_cell], occupied=True)
 
-        # --- start reset procedure using the base env's methods
+        # --- start reset procedure
         with open(os.devnull, "w") as devnull:
             old_fd = os.dup(1)
             os.dup2(devnull.fileno(), 1)
             try:
-                super().begin_reset(seed, drone_options=drone_options)  # Aviary is initialized, uav start position is set and all PyBullet bodies (including obstacles) are destroyed. Obstacles are recreated down the line.
+                super().begin_reset(seed, drone_options=drone_options)
             finally:
-                # suppress PyBullet's C-level "argv[0]=" stdout noise on each new Aviary connection -> clean terminal output
                 os.dup2(old_fd, 1)
                 os.close(old_fd)
 
-        # --- create new boundary walls (enabled from curriculum stage 1+)
+        # --- create new boundary walls
         self.boundary_wall_ids.clear()
         if self.walls_enabled:
             self._create_boundary_walls()
 
-        # --- reset waypoint handler, which sets the current target -> create targets manually from voxel grid and overwrite the targets attribute
+        # --- reset waypoint handler
         self.waypoints.reset(self.env, self.np_random)
         self.waypoints.targets = self._create_targets()
 
-        # --- create new obstacles (after Aviary is initialized and self.env is available)
+        # --- create new obstacles
         self.obstacles.clear()
         self._create_obstacles()
 
@@ -175,86 +186,88 @@ class VectorVoyagerEnv(QuadXBaseEnv):
         self.info["num_obstacles"] = self.num_obs
 
         # finish reset
-        super().end_reset()  # registers also all new pybullet bodies
+        super().end_reset()
 
         return self.state, self.info
 
-    # called in the step function of the QuadXBaseEnv parent class -> new observation
     def compute_state(self) -> None:
-        # compute state of the uav, using the base env
+        """Compute current state representation of the UAV."""
         ang_vel, ang_pos, lin_vel, lin_pos, quaternion = super().compute_attitude()
-        # Return Description
-        # ang_vel	(3,)	Angular velocity [roll, pitch, yaw] — use [2] (yaw)
-        # ang_pos	(3,)	Angular position [roll, pitch, yaw] — use [2] for cos/sin
-        # lin_vel	(3,)	Linear velocity [x, y, z]
-        # lin_pos	(3,)	Linear position [x, y, z] — use [2] (height)
-        # quaternion	(4,)	Quaternion from Euler — passed to distance_to_targets, not stored in attitude
 
-        # create empty array of type float32 and fill it
         attitude = np.empty(11, dtype=np.float32)
         attitude[0] = ang_vel[2]
-        attitude[1] = np.cos(ang_pos[2])  # yaw cos, rotation position
+        attitude[1] = np.cos(ang_pos[2])  # yaw cos
         attitude[2] = np.sin(ang_pos[2])  # yaw sin
         attitude[3:6] = lin_vel
         attitude[6] = lin_pos[2]
-        attitude[7:11] = (self.action)
 
-        # # create empty array of type float32 -> compute the target deltas with the method from the waypointhandler -> fill array
-        # target_deltas = np.empty((1,3), dtype=np.float32)
-        # target_deltas[0, :] = self.waypoints.distance_to_targets(ang_pos, lin_pos, quaternion)
+        # Pad or slice action to fit attitude vector space size of 4
+        if self.action.shape[0] == 3:
+            attitude[7:10] = self.action
+            attitude[10] = 0.0
+        else:
+            attitude[7:11] = self.action
+
         target_deltas = self.waypoints.distance_to_targets(
             ang_pos, lin_pos, quaternion
         ).astype(np.float32)
 
-        # update the current state
         self.state = {"attitude": attitude, "target_deltas": target_deltas}
 
     def step(self, action: np.ndarray):
-        """Override to initialize sub-step collection lists before the physics loop."""
+        """
+        Step environment forward using either relative waypoint targets or velocity commands.
+        """
         self.info["sub_progress"] = []
         self.info["sub_distance"] = []
-        return super().step(action)
 
-    # called by QuadXBaseEnv.step() once per physics sub-step
+        action_clipped = np.clip(action, self.action_space.low, self.action_space.high)
+
+        if self.control_mode == "waypoint":
+            # Current drone position
+            uav_pos = self.env.state(0)[-1]  # Position [x, y, z]
+            uav_yaw = self.env.state(0)[0][2]  # Aktueller Yaw-Winkel der Drohne
+
+            delta_xyz = action_clipped * self.max_waypoint_distance
+            target_pos = uav_pos + delta_xyz
+
+            # Aktuellen Yaw beibehalten (statt starr 0.0)
+            env_action = np.array([target_pos[0], target_pos[1], target_pos[2], uav_yaw], dtype=np.float32)
+        else:
+            env_action = action_clipped
+
+        # Execute base PyFlyt step loop
+        obs, reward, terminated, truncated, info = super().step(env_action)
+
+        # Apply action smoothness penalty
+        if self.prev_action is not None and self.w_smoothness > 0:
+            action_diff = np.sum(np.square(action_clipped - self.prev_action))
+            smoothness_penalty = float(self.w_smoothness * action_diff)
+            reward -= smoothness_penalty
+            info["smoothness_penalty"] = smoothness_penalty
+
+        self.prev_action = action_clipped.copy()
+
+        return obs, reward, terminated, truncated, info
+
     def compute_term_trunc_reward(self) -> None:
-        """Compute termination/truncation and collect per-sub-step data for reward wrappers.
+        """Compute termination/truncation and collect per-sub-step data."""
+        self.reward = 0.0  # neutral; wrapper overwrites
 
-        Reward is set to 0.0 — external RewardWrapper is responsible for
-        computing the actual scalar. Dense shaping data (progress, distance)
-        is appended to lists each sub-step so the wrapper can accumulate
-        the same way the native implementation did.
-        """
-        self.reward = 0.0  # neutral; wrapper will overwrite
-
-        # ── truncation: episode time limit ──
+        # ── truncation: time limit ──
         if self.step_count > self.max_steps:
             self.truncation |= True
 
-        # ── termination: collision with any body ──
+        # ── termination: collision ──
         if np.any(self.env.contact_array[self.env.drones[0].Id]):
             self.info["collision"] = True
             self.termination |= True
- 
-        # ## OOB limits are INVISIBLE to the agent!! -> use walls that prevent out of bounds and collisions with them are detectable 
-        # # check exceed rectangular bounds on cartesian grid_sizes
-        # lin_pos = self.env.state(0)[-1]  # get current position (lin_pos is at state[3])
-        # x, y, z = lin_pos  # [x, y, z]
-
-        # if (
-        #     x < self.occupancy_grid.x_min
-        #     or x > self.occupancy_grid.x_max
-        #     or y < self.occupancy_grid.y_min
-        #     or y > self.occupancy_grid.y_max
-        #     or z > self.z_size  # z constrains the max hight the uav is allowed to fly. collision with the floor is checked above already!
-        # ):
-        #     self.info["out_of_bounds"] = True
-        #     self.termination |= True
 
         # ── per-sub-step dense shaping data ──
         self.info["sub_progress"].append(float(self.waypoints.progress_to_next_target))
         self.info["sub_distance"].append(float(self.waypoints.distance_to_next_target))
 
-        # ── scalar waypoint info (final sub-step value) ──
+        # ── scalar waypoint info ──
         self.info["target_reached"] = bool(self.waypoints.target_reached)
 
         # ── advance waypoints on reach ──
@@ -264,22 +277,12 @@ class VectorVoyagerEnv(QuadXBaseEnv):
             self.info["env_complete"] = self.waypoints.all_targets_reached
             self.info["num_targets_reached"] = self.waypoints.num_targets_reached
 
-
     # ──────────────────────────────────────────────────────────────
-    #  Environment Builders 
+    #  Environment Builders
     # ──────────────────────────────────────────────────────────────
 
     def set_stage(self, stage):
-        """
-        interface method that adjusts the environments difficulty level according to the current stage of the curriculum_callback
-        
-        Expected keys in *stage*:
-            num_obstacles:          int or [min, max]
-            num_targets:            int
-            target_distance_range:  [min_r, max_r] or None
-            obstacle_shapes:        list[str], ["cylinder", "box", "sphere"]
-            obstacle_size_range:    [min, max]  fraction of cell_size
-        """
+        """Adjust environment difficulty level according to curriculum stage."""
         self.num_obstacles_range = stage['num_obstacles_range']
         self.obstacle_shapes = stage["obstacle_shapes"]
         self.obstacle_size_range = stage["obstacle_size_range"]
@@ -289,11 +292,8 @@ class VectorVoyagerEnv(QuadXBaseEnv):
         self.obstacle_distance_range = stage['obstacle_distance_range']
         self.walls_enabled = stage.get('walls_enabled', False)
 
-    # called in reset()
     def _create_targets(self) -> np.ndarray:
-        """create waypoint targets within a square annulus around the UAV start position.
-        Falls back to random free cell placement when target_distance_range is None.
-        """
+        """Create waypoint targets within configured distance range."""
         og = self.occupancy_grid
         start_xy = (self.start_pos[0, 0], self.start_pos[0, 1])
 
@@ -304,49 +304,30 @@ class VectorVoyagerEnv(QuadXBaseEnv):
             else:
                 free_cell = self._get_free_cell_in_range(start_xy, self.target_distance_range)
 
-            x, y = og.cell_to_world(free_cell)
+            x, y = og.cell_to_world(free_cell[:2])
             z = self.np_random.uniform(self.min_height + 0.5, self.z_size)
             targets.append([x, y, z])
             og.mark_cells([free_cell], occupied=True)
 
         return np.array(targets, dtype=np.float32)
 
-    # called in reset()
     def _create_boundary_walls(self):
-        """
-        create invisavle collision walls at env boundaries so that lidar rays can detect them
-        """
+        """Create collision walls at environment boundaries."""
         og = self.occupancy_grid
         half_thickness = 0.01
         z_half = self.z_size / 2
 
-        # (position, halfExtents) for each wall
         walls = [
             # -x wall
-            (
-                [og.x_min - half_thickness, 0.0, z_half],
-                [half_thickness, og.y_size / 2, z_half],
-            ),
+            ([og.x_min - half_thickness, 0.0, z_half], [half_thickness, og.y_size / 2, z_half]),
             # +x wall
-            (
-                [og.x_max + half_thickness, 0.0, z_half],
-                [half_thickness, og.y_size / 2, z_half],
-            ),
+            ([og.x_max + half_thickness, 0.0, z_half], [half_thickness, og.y_size / 2, z_half]),
             # -y wall
-            (
-                [0.0, og.y_min - half_thickness, z_half],
-                [og.x_size / 2, half_thickness, z_half],
-            ),
+            ([0.0, og.y_min - half_thickness, z_half], [og.x_size / 2, half_thickness, z_half]),
             # +y wall
-            (
-                [0.0, og.y_max + half_thickness, z_half],
-                [og.x_size / 2, half_thickness, z_half],
-            ),
+            ([0.0, og.y_max + half_thickness, z_half], [og.x_size / 2, half_thickness, z_half]),
             # ceiling
-            (
-                [0.0, 0.0, self.z_size + half_thickness],
-                [og.x_size / 2, og.y_size / 2, half_thickness],
-            ),
+            ([0.0, 0.0, self.z_size + half_thickness], [og.x_size / 2, og.y_size / 2, half_thickness]),
         ]
 
         for pos, half_extents in walls:
@@ -364,21 +345,16 @@ class VectorVoyagerEnv(QuadXBaseEnv):
             self.boundary_wall_ids.append(body_id)
 
     def _create_obstacles(self):
-        """
-        skip or generate obstacles and position them in the environment
-        """
+        """Generate obstacles and position them in environment."""
         if self.num_obstacles_range is None:
-            # no obstacles created
             self.num_obs = 0
         else:
-            # pick random number for obstacles from range
             self.num_obs = self.np_random.integers(
                 low=self.num_obstacles_range[0],
-                high=self.num_obstacles_range[1]+1,
+                high=self.num_obstacles_range[1] + 1,
             )
 
-            # --- build a set of object body shapes
-            sub_set = max(2, self.num_obs // 3)  # build 3 times less obstacles than self.num_obstacles since they can be reused (better performance)
+            sub_set = max(2, self.num_obs // 3)
             obj_shapes = []
             for _ in range(sub_set):
                 shape_type = self.np_random.choice(self.obstacle_shapes)
@@ -387,7 +363,7 @@ class VectorVoyagerEnv(QuadXBaseEnv):
                     high=self.obstacle_size_range[1],
                     size=(3,),
                 )
-                size_fractions = size_fraction_np.tolist()  # cast to list of python floats
+                size_fractions = size_fraction_np.tolist()
 
                 obj_shape = self._create_object_shape(
                     object_type=shape_type,
@@ -397,56 +373,41 @@ class VectorVoyagerEnv(QuadXBaseEnv):
                 )
                 obj_shapes.append(obj_shape)
 
-            # --- place objects from set of shapes on free cells
             for _ in range(self.num_obs):
-                # sample free cell using the configured placement strategy
                 free_cell = self._sample_obstacle_cell()
-                x, y = self.occupancy_grid.cell_to_world(free_cell)
-                z = self.z_size / 2  # center obstacle vertically (floor-to-ceiling columns)  # TODO adjust hight for shperes and boxes
+                x, y = self.occupancy_grid.cell_to_world(free_cell[:2])
+                z = self.z_size / 2
                 free_position = [x, y, z]
 
-                # randomly pick a shape from set of generated shapes
                 shape = self.np_random.choice(obj_shapes)
                 collision_id = shape[0]
                 visual_id = shape[1]
 
-                # place obstacle
                 self._spawn_object(collision_id=collision_id, base_position=free_position, visual_id=visual_id)
-                self.occupancy_grid.mark_cells([free_cell], occupied=True)
+
+                # Markiere das gesamte 3D-Volumen des Hindernisses im Grid
+                i, j = free_cell[:2]
+                self.occupancy_grid.mark_cells([(i, j, k) for k in range(self.occupancy_grid.nz)], occupied=True)
 
     def _create_object_shape(
-            self, 
-            object_type: Literal['cylinder', 'sphere', 'box'], 
-            scaled_radius: float=1.0, 
-            height: float=1.0,
-            half_extents: Optional[List[float]]=None,  # define half sizes to get full sized objects 
-        ):
-        """
-        create the object shapes that can be spawned with _spawn_object() on multiple positions, without having to recreate the shapes
-        Args:
-            object_type:    'cylinder' or 'box' or sphere
-            scaled_radius:  fraction of *cell_size* used as cylinder radius [0-1]
-            height:         fraction of environment z-height  (1.0 = floor -> ceiling) [0-1]
-            half_extents:   [sx, sy, sz] — fractions of cell_size (xy) and
-                            grid z-height (z) used as **full-size** scalars;
-                            the method halves them for PyBullet's halfExtents. [0-1]
-
-        Returns:
-            (collision_id, visual_id)   visual_id is -1 when visual_obstacles=False
-        """
-        visual_id = -1  # PyBullet convention: no visual shape
+            self,
+            object_type: Literal['cylinder', 'sphere', 'box'],
+            scaled_radius: float = 1.0,
+            height: float = 1.0,
+            half_extents: Optional[List[float]] = None,
+    ):
+        """Create collision and visual shapes for PyBullet."""
+        visual_id = -1
         if object_type == 'cylinder':
             r = self.cell_size * scaled_radius
             h = self.grid_sizes[-1] * height
-            
-            # create collision shape
+
             collision_id = self.env.createCollisionShape(
                 shapeType=self.env.GEOM_CYLINDER, radius=r, height=h,
             )
             if self.visual_obstacles:
-                # create visual shape
                 visual_id = self.env.createVisualShape(
-                    shapeType=self.env.GEOM_CYLINDER, radius=r, length=h,  # obstacles have full hight of the environment (from ground to sealing)
+                    shapeType=self.env.GEOM_CYLINDER, radius=r, length=h,
                     rgbaColor=[0.8, 0.2, 0.2, 1.0],
                 )
 
@@ -466,7 +427,7 @@ class VectorVoyagerEnv(QuadXBaseEnv):
             if half_extents is None:
                 half_extents = [0.5, 0.5, 0.5]
             he = [
-                self.cell_size * half_extents[0] / 2.0,  # define half size to get full sized objects
+                self.cell_size * half_extents[0] / 2.0,
                 self.cell_size * half_extents[1] / 2.0,
                 self.grid_sizes[-1] * half_extents[2] / 2.0,
             ]
@@ -482,110 +443,79 @@ class VectorVoyagerEnv(QuadXBaseEnv):
         return int(collision_id), int(visual_id)
 
     def _spawn_object(
-            self, 
-            collision_id, 
+            self,
+            collision_id,
             base_position: List[float],
-            base_orientation: List[int] | None=None,
+            base_orientation: List[int] | None = None,
             visual_id=-1,
-        ):
-        """
-        position object body in environment.
-
-        Args:
-            collision_id: PyBullet collision shape id
-            base_position: [x, y, z] world coordinates of the objects center position
-            base_orientation: [x, y, z, w] quaternion representation of 3d rotation
-        
-        """
-        # create body id
+    ):
+        """Spawn multibody object in PyBullet world."""
         object_id = self.env.createMultiBody(
-            baseMass=0.0,  # Mass=0 -> Static obstacles
+            baseMass=0.0,
             baseVisualShapeIndex=int(visual_id),
             baseCollisionShapeIndex=int(collision_id),
             basePosition=base_position,
             baseOrientation=base_orientation if base_orientation is not None else [0, 0, 0, 1],
-            )
-        
-        self.obstacles.append(object_id)  # collect object ids to destroy the objects at the end of the episode
+        )
+        self.obstacles.append(object_id)
 
-    def _sample_obstacle_cell(self) -> tuple[int, int]:
-        """Pick a free cell for an obstacle using the current placement strategy."""
+    def _sample_obstacle_cell(self) -> tuple[int, ...]:
+        """Pick a free cell using configured placement strategy."""
         if self.obstacle_placement == "around_target":
             target_xy = tuple(self.waypoints.targets[0][:2])
             if self.obstacle_distance_range is not None:
                 return self._get_free_cell_in_range(target_xy, self.obstacle_distance_range)
-            # no explicit range — fall back to random
             return self.occupancy_grid.get_random_free_cell()
 
         if self.obstacle_placement == "along_path":
             return self._get_free_cell_along_path()
 
-        # default: "random"
         return self.occupancy_grid.get_random_free_cell()
 
     def _get_free_cell_in_range(
-        self,
-        center_xy: tuple[float, float],
-        distance_range: Sequence[float],
-    ) -> tuple[int, int]:
-        """return a random free cell within a square around *center_xy*
-
-        Args:
-            center_xy: (x, y) world coordinates of the squares centre
-            distance_range: (r_min, r_max) in world units
-
-        Returns:
-            (i, j) global grid indices of the chosen free cell
-        """
+            self,
+            center_xy: tuple[float, float],
+            distance_range: Sequence[float],
+    ) -> tuple[int, ...]:
+        """Sample free cell within distance range of center coordinate."""
         og = self.occupancy_grid
         ci, cj = og.world_to_cell(*center_xy)
         r_min, r_max = distance_range
-        
-        # convert radii from world units to cell units
+
         cells_inner = int(np.floor(r_min / og.cell_size))
         cells_outer = int(np.ceil(r_max / og.cell_size))
 
-        # outer square bounds, clamped to grid
         i_lo = max(ci - cells_outer, 0)
         i_hi = min(ci + cells_outer, og.nx - 1)
         j_lo = max(cj - cells_outer, 0)
         j_hi = min(cj + cells_outer, og.ny - 1)
 
-        # all cell indices inside the outer square
         ii, jj = np.mgrid[i_lo:i_hi + 1, j_lo:j_hi + 1]
 
-        # exclude inner square (cells too close to start)
         outside_inner = (np.abs(ii - ci) >= cells_inner) | (np.abs(jj - cj) >= cells_inner)
 
-        # exclude occupied cells
-        free = ~og.grid[i_lo:i_hi + 1, j_lo:j_hi + 1]
+        # 2D Projektion der Belegung prüfen (frei über alle Z)
+        free_2d = ~np.any(og.grid[i_lo:i_hi + 1, j_lo:j_hi + 1, :], axis=-1)
 
-        valid_cells = np.argwhere(outside_inner & free)
+        valid_cells = np.argwhere(outside_inner & free_2d)
         if len(valid_cells) == 0:
             raise ValueError("No free cells in the requested distance range")
 
         pick = self.np_random.integers(len(valid_cells))
-        return (int(valid_cells[pick, 0] + i_lo), int(valid_cells[pick, 1] + j_lo))  # convert local sub-grid indices back to global grid indices
+        return (int(valid_cells[pick, 0] + i_lo), int(valid_cells[pick, 1] + j_lo), 0)
 
     def _get_free_cell_along_path(self, spread: int = 2):
-        """
-        pick a free cell near the start→target line
-
-        Args:
-            spread: max perpendicular offset in cells (0 = exactly on the line)
-        """
+        """Sample free cell near start->target path."""
         og = self.occupancy_grid
 
         start_ij = np.array(og.world_to_cell(*self.start_pos[0, :2]))
         target_ij = np.array(og.world_to_cell(*self.waypoints.targets[0][:2]))
 
-        # rasterize the line into cell coordinates
-        n_points = int(np.linalg.norm(target_ij - start_ij)) + 1  # euclidian distance start->target gives point count of cells 
+        n_points = int(np.linalg.norm(target_ij - start_ij)) + 1
         line_cells = np.round(
-            np.linspace(start_ij, target_ij, max(n_points, 2))  # interpolate n_points (even spaced coordinate pairs) from start to target. plotting a straght line similar to [Bresenham's line algorithm](https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm)
-        ).astype(int)  # (N, 2)
+            np.linspace(start_ij, target_ij, max(n_points, 2))
+        ).astype(int)
 
-        # add random perpendicular offset
         offsets = self.np_random.integers(-spread, spread + 1, size=line_cells.shape)
         candidates = np.clip(
             line_cells + offsets,
@@ -593,9 +523,8 @@ class VectorVoyagerEnv(QuadXBaseEnv):
             [og.nx - 1, og.ny - 1],
         )
 
-        # keep only free cells, skip start/target vicinity
         mask = np.array([
-            not og.grid[c[0], c[1]]
+            not np.any(og.grid[c[0], c[1], :])
             and not np.array_equal(c, start_ij)
             and not np.array_equal(c, target_ij)
             for c in candidates
@@ -606,4 +535,4 @@ class VectorVoyagerEnv(QuadXBaseEnv):
             return og.get_random_free_cell()
 
         idx = self.np_random.integers(len(valid))
-        return tuple(valid[idx])
+        return (int(valid[idx][0]), int(valid[idx][1]), 0)

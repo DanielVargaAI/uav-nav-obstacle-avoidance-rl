@@ -1,0 +1,8 @@
+# @package _global_
+policy_kwargs:
+  features_extractor_class: "uav_nav_obstacle_avoidance_rl.utils.cnn_extractor.EgoGridCombinedExtractor"
+  features_extractor_kwargs:
+    features_dim: 256
+  net_arch:
+    pi: [128, 128]
+    vf: [128, 128]

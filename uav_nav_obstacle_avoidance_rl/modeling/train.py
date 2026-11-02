@@ -7,6 +7,7 @@ import yaml
 import importlib
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
+from gymnasium.spaces import Dict as DictSpace
 from wandb.integration.sb3 import WandbCallback
 
 from uav_nav_obstacle_avoidance_rl import config
@@ -17,6 +18,8 @@ from uav_nav_obstacle_avoidance_rl.utils.eval_metrics_callback import CustomEval
 from uav_nav_obstacle_avoidance_rl.utils.train_metadata_logger import save_model_metadata
 from uav_nav_obstacle_avoidance_rl.utils.train_metrics_callback import TrainMetricsCallback
 from uav_nav_obstacle_avoidance_rl.utils.cnn_extractor import Lidar2DCombinedExtractor
+from uav_nav_obstacle_avoidance_rl.utils.saver import ModelSaver
+from uav_nav_obstacle_avoidance_rl.utils.local_metrics_logger import LocalMetricsCallback
 
 app = typer.Typer()
 logger = config.logger
@@ -100,31 +103,42 @@ def _train(
         monitor_kwargs=monitor_info,
     )
 
-    model_save_dir = Path(f"{run.dir}/models")
+    # 1. ZENTRALEN EXPERIMENT-ORDNER IM PROJEKT ERSTELLEN
+    lidar_name = f"{env_config['lidar']['fov_vertical']}deg_{env_config['lidar']['num_rays_horizontal']}x{env_config['lidar']['num_rays_vertical']}"
+    run_name = run.name if hasattr(run, "name") and run.name else "PPO_Run"
 
-    # Metadaten automatisch mitspeichern
+    # Erzeugt z. B.: reports/45.0deg_72x9/PPO_Run/
+    exp_dir = Path(config.REPORTS_DIR) / lidar_name / run_name
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ordner für Modelle und Eval-Plots vorbereiten
+    model_save_dir = exp_dir / "models"
+    eval_plots_dir = exp_dir / "eval_logs"
+    tb_log_dir = exp_dir / "tensorboard"
+
+    # 2. METADATEN SPEICHERN
     save_model_metadata(
         save_dir=model_save_dir,
         env_config=env_config,
         policy_kwargs=policy_kwargs,
     )
 
-    # ----- callbacks --------
+    # 3. CALLBACKS MIT DEM PROJEKT-PFAD FÜTTERN
     callbacks = []
     wandb_callback = WandbCallback(verbose=params.verbose, model_save_path=None)
 
-    train_callback = TrainMetricsCallback(
-        run_path=run.dir,
+    train_callback = LocalMetricsCallback(
+        save_dir=str(exp_dir),
         verbose=params.verbose,
     )
 
     adj_eval_freq = params.eval_freq // params.n_envs
-    # adj_n_eval_episodes = params.n_eval_episodes // params.n_envs  # Old
     adj_n_eval_episodes = max(1, 32 // params.n_envs)
+
     eval_callback = CustomEvalCallback(
         vec_env_eval,
-        best_model_save_path=model_save_dir.as_posix(),
-        log_path=run.dir,
+        best_model_save_path=str(model_save_dir),
+        log_path=str(eval_plots_dir),  # <-- Hier landen die HTMLs jetzt direkt im Projekt!
         eval_freq=adj_eval_freq,
         n_eval_episodes=adj_n_eval_episodes,
         deterministic=True,
@@ -134,9 +148,7 @@ def _train(
         seed=params.seed,
     )
 
-    callbacks.append(wandb_callback)
-    callbacks.append(train_callback)
-    callbacks.append(eval_callback)
+    callbacks.extend([wandb_callback, train_callback, eval_callback])
 
     if curriculum_config.pop('enabled', False):
         curriculum_callback = CurriculumCallback(**curriculum_config, verbose=params.verbose, eval_env=vec_env_eval)
@@ -144,13 +156,18 @@ def _train(
         callbacks.append(curriculum_callback)
 
     # 3. Model Init mit übergabe der policy_kwargs
+    if isinstance(vec_env.observation_space, DictSpace):
+        policy_type = "MultiInputPolicy"
+    else:
+        policy_type = "MlpPolicy"
+
     model = PPO(
-        "MlpPolicy",
+        policy_type,
         vec_env,
         **ppo_config,
         policy_kwargs=policy_kwargs,
         verbose=params.verbose,
-        tensorboard_log=f"{run.dir}/tensorboard",
+        tensorboard_log=str(tb_log_dir),
         seed=params.seed,
         device="cpu",  # TODO: test "cuda" ("cpu" is old value)
     )
@@ -161,6 +178,21 @@ def _train(
         progress_bar=True,
         log_interval=params.log_interval,
     )
+
+    # 4. Letztes Modell und Konfiguration lokal speichern
+    saver = ModelSaver(base_dir=exp_dir.as_posix())
+    saver.save_checkpoint(
+        model=model,
+        lidar_config=env_config.get("lidar", {}),
+        model_config=ppo_config,
+        lidar_name="",  # Leer lassen, da exp_dir bereits den lidar_name enthält
+        model_name="",  # Leer lassen
+        metrics={"timesteps": params.timesteps},
+        env_config=env_config,
+    )
+
+    # Optional: Auch direkt als W&B Modell-Artefakt als 'latest_model' sichern
+    model.save(f"{model_save_dir}/latest_model.zip")
 
 
 """

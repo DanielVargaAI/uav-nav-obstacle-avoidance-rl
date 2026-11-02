@@ -8,8 +8,28 @@ uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-
 uv run python -m uav_nav_obstacle_avoidance_rl.modeling.train run-train   --exp-name "more_rays"   --wandb-tags exp-6   --timesteps 2000000   --eval-freq 200000   --n-envs 16   --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml"
 
 
---- Mehrere Experimente
+--- Mehrere Experimente ---
 uv run python -m uav_nav_obstacle_avoidance_rl.modeling.run_experiments --use-wandb --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml" --timesteps 2000000   --eval-freq 200000 --n-envs 16
 
---- Mehrere ohne WANDB
+--- Mehrere ohne WANDB ---
 uv run python -m uav_nav_obstacle_avoidance_rl.modeling.run_experiments  --no-use-wandb  --config-file "uav_nav_obstacle_avoidance_rl/modeling/config-cnn2d.yaml" --timesteps 2000000   --eval-freq 200000 --n-envs 16
+
+
+--- Visualizer starten ---
+- Mit sichtbarem Lidar -
+uv run python -m uav_nav_obstacle_avoidance_rl.visualization.visualizer --model-path "reports/45.0deg_72x9/PPO_Model/run_20261017_144524/model_sb3.zip" --stage-idx 1 --show-lidar
+
+- Ohne sichtbarem Lidar -
+uv run python -m uav_nav_obstacle_avoidance_rl.visualization.visualizer main \
+  --model-path "reports/45.0deg_72x9/dummy-3ys2cveg/models/latest_model.zip" \
+  --stage-idx 1 \
+  --episodes 5 \
+
+
+--- Plotter aufrufen ---
+uv run python -m uav_nav_obstacle_avoidance_rl.visualization.plotter --run-dir "reports/45.0deg_72x9/dummy-7oy6j5u6"
+
+
+uv run python -m uav_nav_obstacle_avoidance_rl.visualization.visualizer --model-path "reports/45.0deg_72x9/dummy-7oy6j5u6/run_20261102_111529/model_sb3.zip" --stage-idx 0
+
+uv run python -m uav_nav_obstacle_avoidance_rl.modeling.run_experiments --timesteps 20000   --eval-freq 2000 --config-file uav_nav_obstacle_avoidance_rl/modeling/config-cnn-map.yaml --no-use-wandb --n-envs 16

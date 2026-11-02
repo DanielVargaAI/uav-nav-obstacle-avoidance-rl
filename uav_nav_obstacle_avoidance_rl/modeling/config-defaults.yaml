@@ -21,14 +21,24 @@ env:
 
   # Simulation --- with agent_hz=30 and 80s/episode, an episode is up to ~2400 steps
   max_duration_seconds: 80.0        # max simulation time of the env
-  flight_mode: 5                    # PyFlyt velocity control (u, v, vr, vz)
+#  flight_mode: 5                    # PyFlyt velocity control (u, v, vr, vz)
   angle_representation: "quaternion" # "euler" or "quaternion"
   agent_hz: 30                      # looprate of the agent to environment interaction 30Hz agent / 120Hz env -> 1(action agent) / 4(steps env) ratio
   render_mode: null              # "human" or "rgb_array" or None
   render_resolution: [480, 480]
 
+  # Flight Control
+  control_mode: "waypoint"          # "velocity" (alt: direkte Geschwindigkeiten) | "waypoint" (neu: relative Wegpunkte)
+  max_waypoint_distance: 1.5        # Maximaler Aktionsradius pro Decision-Step in Metern
+  flight_mode: 7                    # PyFlyt Position Control (x, y, z, yaw)
+
   # LiDAR / Perception
-  perception_mode: "lidar"          # none | lidar
+#  perception_mode: "lidar"          # none | lidar | ego_grid
+  perception_mode: "ego_grid"
+  ego_grid:
+    grid_size_meters: 10.0          # 10x10 Meter Bereich um die Drohne
+    grid_height_meters: 4.0         # 4 Meter Höhe des Ausschnitts
+    resolution: 0.2                 # 0.2m Pro Zelle -> 50x50 Matrix
   lidar:
     num_rays_horizontal: 72
     num_rays_vertical: 9
@@ -56,12 +66,13 @@ env:
     # r_obs = -[max(0, exp(-k*d_min) - exp(-k*d_thresh))]^2
     custom:
       k: 1.0                    # obstacle penalty steepness
-      d_thresh: 3.0             # obstacle activation range (meters)
-      w_prog: 1.0               # weight for progress reward
-      w_obs: 1.0                # weight for obstacle avoidance reward
-      collision_penalty: 5.0   # terminal penalty C
-      target_reached_bonus: 10.0  # discrete bonus B
-      step_penalty: 0.01         # time cost P
+      d_thresh: 2.0             # obstacle activation range (meters)
+      w_prog: 2.0               # weight for progress reward
+      w_obs: 0.5                # weight for obstacle avoidance reward
+      collision_penalty: 50.0   # terminal penalty C
+      target_reached_bonus: 100.0  # discrete bonus B
+      step_penalty: 0.05         # time cost P
+      w_smoothness: 0.1             # Bestrafung für abrupte Wegpunktsprünge: -w_smoothness * ||a_t - a_{t-1}||^2
 
 
 # ── Curriculum Learning ──────────────────────────────────────

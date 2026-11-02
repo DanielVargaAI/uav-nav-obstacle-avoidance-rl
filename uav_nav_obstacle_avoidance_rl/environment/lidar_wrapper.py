@@ -40,6 +40,7 @@ class LidarObservationWrapper(gym.ObservationWrapper):
             fov_vertical: float,
             ray_start_offset: float,
             add_to_obs: Literal["append", "separate", "replace"] = "separate",
+            show_rays: bool = True,
     ):
         super().__init__(env)
         self._base_env = self.unwrapped  # VectorVoyagerEnv; use _base_env.env to access the Aviary
@@ -54,6 +55,7 @@ class LidarObservationWrapper(gym.ObservationWrapper):
         self.fov_vertical = math.radians(fov_vertical)
         self.ray_start_offset = ray_start_offset
         self.add_to_obs = add_to_obs
+        self.show_rays = show_rays
 
         # precompute ray directions in local frame (body frame)
         self._ray_directions = self._compute_ray_directions()
@@ -216,10 +218,10 @@ class LidarObservationWrapper(gym.ObservationWrapper):
 
         lidar_data = self._cast_rays()
 
-        if self._base_env.render_mode == "human":
+        if self._base_env.render_mode == "human" and self.show_rays:
             self.render_lidar_debug(duration=0.05)
 
-        if self.add_to_obs  == "separate":
+        if self.add_to_obs == "separate":
             return {**observation, "lidar": lidar_data}
         # TODO add the other options ?
 

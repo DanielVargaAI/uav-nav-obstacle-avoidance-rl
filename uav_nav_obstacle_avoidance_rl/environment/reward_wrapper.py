@@ -88,7 +88,14 @@ class CustomRewardWrapper(gym.Wrapper):
         r_prog = self._compute_progress_reward(info["sub_distance"][-1])
 
         # –– r_obs: squared exponential of d_min ––
-        r_obs = self._compute_obstacle_reward(obs['lidar'])
+        if "lidar" in obs:
+            r_obs = self._compute_obstacle_reward(obs["lidar"])
+        elif "ego_grid" in obs:
+            # Bei ego_grid repräsentiert 0.0 belegte Zellen (Abstand), 1.0 freie Zellen.
+            # Alternativ kann r_obs auf 0.0 gesetzt werden, falls ego_grid nicht für Abstandsstrafe genutzt wird:
+            r_obs = 0.0
+        else:
+            r_obs = 0.0
 
         # –– r_collision ––
         r_collision = -self.collision_penalty if info["collision"] else 0.0
